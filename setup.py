@@ -40,6 +40,7 @@ setup(
         'setuptools',
         'pip',
         'requests[security]',
+        'python-slugify',
     ],
     tests_require=tests_require,
     extras_require={
