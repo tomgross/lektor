@@ -36,6 +36,7 @@ setup(
         'EXIFRead',
         'inifile',
         'Babel',
+        'BeautifulSoup4',
         'functools32;python_version<"3.2.3"',
         'setuptools',
         'pip',
