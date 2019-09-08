@@ -31,6 +31,7 @@ setup(
     platforms="any",
     install_requires=[
         "Babel",
+        'BeautifulSoup4',
         "click>=6.0",
         'enum34;python_version<"3.4"',
         "EXIFRead",

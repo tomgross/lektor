@@ -97,7 +97,6 @@ from lektor.types.primitives import (
     StringType,
     StringsType,
     TextType,
-    HtmlType,
     IntegerType,
     FloatType,
     BooleanType,
@@ -106,7 +105,7 @@ from lektor.types.primitives import (
 )
 from lektor.types.multi import CheckboxesType, SelectType
 from lektor.types.special import SortKeyType, SlugType, UrlType
-from lektor.types.formats import MarkdownType
+from lektor.types.formats import HtmlType, MarkdownType
 from lektor.types.flow import FlowType
 from lektor.types.fake import LineType, SpacingType, InfoType, HeadingType
 
