@@ -2,7 +2,6 @@ from datetime import date
 from datetime import datetime
 
 from babel.dates import get_timezone
-from markupsafe import Markup
 from pytz import FixedOffset
 
 from lektor.constants import PRIMARY_ALT
@@ -44,15 +43,6 @@ class TextType(Type):
         if raw.value is None:
             return raw.missing_value("Missing text")
         return raw.value
-
-
-class HtmlType(Type):
-    widget = "multiline-text"
-
-    def value_from_raw(self, raw):
-        if raw.value is None:
-            return raw.missing_value("Missing HTML")
-        return Markup(raw.value)
 
 
 class IntegerType(SingleInputType):
