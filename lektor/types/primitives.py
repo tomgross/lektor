@@ -3,11 +3,16 @@ from datetime import date
 from datetime import datetime
 
 from babel.dates import get_timezone
+from markupsafe import Markup
 
 from lektor.constants import PRIMARY_ALT
 from lektor.i18n import get_i18n_block
 from lektor.types.base import Type
 from lektor.utils import bool_from_string
+
+# + patch
+from lektor.types.html import HTMLDescriptor
+# - patch
 
 
 class SingleInputType(Type):
@@ -43,6 +48,15 @@ class TextType(Type):
         if raw.value is None:
             return raw.missing_value("Missing text")
         return raw.value
+
+
+class HtmlType(Type):
+    widget = "multiline-text"
+
+    def value_from_raw(self, raw):
+        if raw.value is None:
+            return raw.missing_value("Missing HTML")
+        return HTMLDescriptor(raw.value or u"", raw)
 
 
 class IntegerType(SingleInputType):

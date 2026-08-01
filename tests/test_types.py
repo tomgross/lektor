@@ -10,7 +10,6 @@ from lektor.context import Context
 from lektor.datamodel import Field
 from lektor.types.base import BadValue
 from lektor.types.base import Undefined
-from lektor.types.formats import HTMLDescriptor
 from lektor.types.formats import MarkdownDescriptor
 
 
@@ -305,6 +304,7 @@ def test_datetime_missing(env, pad):
     assert "Missing value" in rv._undefined_hint
 
 # + patch
+from lektor.types.html import HTMLDescriptor
 def test_html_links(env, pad):
     field = make_field(env, "html")
     source = DummySource()
