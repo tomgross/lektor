@@ -24,7 +24,7 @@ def discover_relevant_flowblock_models(flow, pad, record, alt):
 
     all_blocks = pad.db.flowblocks
     if flow_blocks is None:
-        return dict((k, v.to_json(pad, record, alt)) for k, v in all_blocks.items())
+        return {k: v.to_json(pad, record, alt) for k, v in all_blocks.items()}
 
     wanted_blocks = set()
     to_process = flow_blocks[:]
@@ -39,8 +39,7 @@ def discover_relevant_flowblock_models(flow, pad, record, alt):
             if isinstance(field.type, FlowType):
                 if field.type.flow_blocks is None:
                     raise RuntimeError(
-                        "Nested flow-blocks require explicit "
-                        "list of involved blocks."
+                        "Nested flow-blocks require explicit list of involved blocks."
                     )
                 to_process.extend(field.type.flow_blocks)
 
@@ -101,7 +100,7 @@ class FlowBlock:
             try:
                 return self.pad.db.env.render_template(
                     [
-                        "blocks/%s.html" % self._data["_flowblock"],
+                        "blocks/{}.html".format(self._data["_flowblock"]),
                         "blocks/default.html",
                     ],
                     pad=self.pad,
@@ -115,10 +114,7 @@ class FlowBlock:
             ctx.flow_block_render_stack.pop()
 
     def __repr__(self):
-        return "<%s %r>" % (
-            self.__class__.__name__,
-            self["_flowblock"],
-        )
+        return f"<{self.__class__.__name__} {self['_flowblock']!r}>"
 
 
 class Flow:
@@ -127,7 +123,7 @@ class Flow:
         self.record = record
 
     def __html__(self):
-        return Markup(u"\n\n".join(x.__html__() for x in self.blocks))
+        return Markup("\n\n".join(x.__html__() for x in self.blocks))
 
     def __bool__(self):
         return bool(self.blocks)
@@ -135,10 +131,7 @@ class Flow:
     __nonzero__ = __bool__
 
     def __repr__(self):
-        return "<%s %r>" % (
-            self.__class__.__name__,
-            self.blocks,
-        )
+        return f"<{self.__class__.__name__} {self.blocks!r}>"
 
 
 class FlowDescriptor:
@@ -215,7 +208,7 @@ class FlowType(Type):
 
                 d = {}
                 for key, lines in tokenize(block_lines):
-                    d[key] = u"".join(lines)
+                    d[key] = "".join(lines)
                 rv.append(flowblock.process_raw_data(d, pad=raw.pad))
         except BadFlowBlock as e:
             return raw.bad_value(str(e))

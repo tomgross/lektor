@@ -1,6 +1,5 @@
 import os
 import shutil
-from pathlib import Path
 
 import pytest
 
@@ -14,15 +13,15 @@ from lektor.reporter import Reporter
 
 
 @pytest.fixture(scope="function")
-def pntest_project(tmp_path):
-    src = Path(__file__).parent / "dependency-test-project"
+def pntest_project(tmp_path, data_path):
+    src = data_path / "dependency-test-project"
     tmp_project = tmp_path / "project"
     shutil.copytree(src, tmp_project)
     return Project.from_path(tmp_project)
 
 
 @pytest.fixture
-def pntest_env(pntest_project):
+def pntest_env(pntest_project, save_sys_path):
     return Environment(pntest_project)
 
 
@@ -39,15 +38,7 @@ class DependencyReporter(Reporter):
     def report_dependencies(self, dependencies):
         source_id = self.current_artifact.source_obj["_id"]
         row = self.deps.setdefault(source_id, set())
-        for (
-            _artifact_name,
-            source_path,
-            _mtime,
-            _size,
-            _checksum,
-            _is_dir,
-            _is_primary,
-        ) in dependencies:
+        for _artifact_name, source_path, *_rest in dependencies:
             row.add(source_path)
 
     @property
@@ -99,7 +90,7 @@ def test_prev_next_dependencies(tmp_path, pntest_env, pntest_reporter):
     builder.build_all()
 
     # post2, post3, and post4 had to be rebuilt, but not post1.
-    assert set(["post2", "post3", "post4"]) == set(reporter.artifact_ids)
+    assert {"post2", "post3", "post4"} == set(reporter.artifact_ids)
 
     # post2 depends on post3 now, not post4.
     assert "content/post3/contents.lr" in reporter.deps["post2"]
@@ -120,4 +111,4 @@ def test_prev_next_virtual_resolver(pntest_pad):
         assert siblings.next_page["_id"] == "post4"
 
         with pytest.raises(NotImplementedError):
-            siblings.url_path  # pylint: disable=pointless-statement
+            _ = siblings.url_path

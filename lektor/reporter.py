@@ -13,15 +13,22 @@ _build_buffer_stack = LocalStack()
 
 
 def describe_build_func(func):
-    self = getattr(func, "__self__", None)
-    if self is not None and any(
-        x.__name__ == "BuildProgram" for x in self.__class__.__mro__
-    ):
-        return self.__class__.__module__ + "." + self.__class__.__name__
-    return func.__module__ + "." + func.__name__
+    if hasattr(func, "func"):
+        func = func.func  # unwrap functools.partial
+    try:
+        qualname = func.__qualname__
+        class_name, _, method = qualname.rpartition(".")
+        if class_name and method == "build_artifact":
+            # Strip method name from methods of BuildProgram instances
+            qualname = class_name
+        return f"{func.__module__}.{qualname}"
+    except AttributeError:
+        return repr(func)
 
 
 class Reporter:
+    _change_callbacks = set()
+
     def __init__(self, env, verbosity=0):
         self.env = env
         self.verbosity = verbosity
@@ -97,6 +104,14 @@ class Reporter:
             self.builder_stack.pop()
             self.finish_build(activity, now)
 
+    @contextmanager
+    def on_build_change(self, callback):
+        self._change_callbacks.add(callback)
+        try:
+            yield
+        finally:
+            self._change_callbacks.discard(callback)
+
     def start_build(self, activity):
         pass
 
@@ -112,8 +127,15 @@ class Reporter:
         try:
             yield
         finally:
+            self.report_artifact_built(artifact, is_current)
             self.finish_artifact_build(now)
             self.artifact_stack.pop()
+
+    def report_artifact_built(self, artifact, is_current):
+        if is_current:
+            return
+        for callback in self._change_callbacks:
+            callback(artifact)
 
     def start_artifact_build(self, is_current):
         pass
@@ -277,21 +299,21 @@ class CliReporter(Reporter):
         click.echo(" " * (self.indentation * 2) + text)
 
     def _write_kv_info(self, key, value):
-        self._write_line("%s: %s" % (key, style(str(value), fg="yellow")))
+        self._write_line("{}: {}".format(key, style(str(value), fg="yellow")))
 
     def start_build(self, activity):
-        self._write_line(style("Started %s" % activity, fg="cyan"))
+        self._write_line(style(f"Started {activity}", fg="cyan"))
         if not self.show_build_info:
             return
-        self._write_line(style("  Tree: %s" % self.env.root_path, fg="cyan"))
+        self._write_line(style(f"  Tree: {self.env.root_path}", fg="cyan"))
         self._write_line(
-            style("  Output path: %s" % self.builder.destination_path, fg="cyan")
+            style(f"  Output path: {self.builder.destination_path}", fg="cyan")
         )
 
     def finish_build(self, activity, start_time):
         self._write_line(
             style(
-                "Finished %s in %.2f sec" % (activity, time.time() - start_time),
+                f"Finished {activity} in {time.time() - start_time:.2f} sec",
                 fg="cyan",
             )
         )
@@ -304,7 +326,7 @@ class CliReporter(Reporter):
             sign = click.style("X", fg="cyan")
         else:
             sign = click.style("U", fg="green")
-        self._write_line("%s %s" % (sign, artifact.artifact_name))
+        self._write_line(f"{sign} {artifact.artifact_name}")
 
         self.indent()
 
@@ -312,12 +334,9 @@ class CliReporter(Reporter):
         self.outdent()
 
     def report_build_all_failure(self, failures):
+        pluralize = "failure" if failures == 1 else "failures"
         self._write_line(
-            click.style(
-                "Error: Build failed with %s failure%s."
-                % (failures, failures != 1 and "s" or ""),
-                fg="red",
-            )
+            click.style(f"Error: Build failed with {failures} {pluralize}.", fg="red")
         )
 
     def report_failure(self, artifact, exc_info):
@@ -325,7 +344,7 @@ class CliReporter(Reporter):
         err = " ".join(
             "".join(traceback.format_exception_only(*exc_info[:2])).splitlines()
         ).strip()
-        self._write_line("%s %s (%s)" % (sign, artifact.artifact_name, err))
+        self._write_line(f"{sign} {artifact.artifact_name} ({err})")
 
         if not self.show_tracebacks:
             return
@@ -347,7 +366,8 @@ class CliReporter(Reporter):
     def report_write_source_info(self, info):
         if self.show_artifact_internals and self.show_debug_info:
             self._write_kv_info(
-                "writing source info", "%s [%s]" % (info.title_i18n["en"], info.type)
+                "writing source info",
+                "{} [{}]".format(info.title_i18n["en"], info.type),
             )
 
     def report_prune_source_info(self, source):
@@ -372,7 +392,8 @@ class CliReporter(Reporter):
     def enter_source(self):
         if not self.show_source_internals:
             return
-        self._write_line("Source %s" % style(repr(self.current_source), fg="magenta"))
+        current_source = style(repr(self.current_source), fg="magenta")
+        self._write_line(f"Source {current_source}")
         self.indent()
 
     def leave_source(self, start_time):
@@ -380,10 +401,13 @@ class CliReporter(Reporter):
             self.outdent()
 
     def report_pruned_artifact(self, artifact_name):
-        self._write_line("%s %s" % (style("D", fg="red"), artifact_name))
+        self._write_line("{} {}".format(style("D", fg="red"), artifact_name))
 
 
 null_reporter = NullReporter(None)
+
+
+reporter: Reporter
 
 
 @LocalProxy

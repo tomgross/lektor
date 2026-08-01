@@ -1,9 +1,12 @@
+import importlib
 import os
 import shutil
 import sys
 import textwrap
+from contextlib import contextmanager
+from contextlib import suppress
+from pathlib import Path
 
-import pkg_resources
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 
@@ -15,6 +18,16 @@ from lektor.environment import Environment
 from lektor.environment.expressions import Expression
 from lektor.project import Project
 from lektor.reporter import BufferReporter
+from lektor.utils import locate_executable
+
+
+@pytest.fixture(scope="session")
+def data_path():
+    """Path to directory which contains test data.
+
+    Current this data lives in the ``tests`` directory.
+    """
+    return Path(__file__).parent
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -41,14 +54,14 @@ def temporary_lektor_cache(tmp_path_factory):
     mp.undo()
 
 
-@pytest.fixture
-def save_sys_path(monkeypatch):
-    """Save `sys.path`, `sys.modules`, and `pkg_resources` state on test
+@contextmanager
+def restore_import_state():
+    """Save `sys.path`, and `sys.modules` state on test
     entry, restore after test completion.
 
     Any test which constructs a `lektor.environment.Environment` instance
     or which runs any of the Lektor CLI commands should use this fixture
-    to ensure that alternations made to `sys.path` do not interfere with
+    to ensure that alterations made to `sys.path` do not interfere with
     other tests.
 
     Lektor's private package cache is added to `sys.path` by
@@ -60,33 +73,92 @@ def save_sys_path(monkeypatch):
     package caches.
 
     """
-    monkeypatch.setattr(sys, "path", sys.path.copy())
+    path = sys.path.copy()
+    meta_path = sys.meta_path.copy()
+    path_hooks = sys.path_hooks.copy()
+    modules = sys.modules.copy()
 
-    # Restoring `sys.modules` is an attempt to unload any
-    # modules loaded during the test so that they can be re-loaded for
-    # the next test.  This is not guaranteed to work, since there are
-    # numerous ways that a reference to a loaded module may still be held.
-    monkeypatch.setattr(sys, "modules", sys.modules.copy())
+    # Importlib_metadata, when it is imported, cripples the stdlib distribution finder
+    # by deleting its find_distributions method.
+    #
+    # https://github.com/python/importlib_metadata/blob/705a7571ec7c5abec4d4b008da3a58df7e5c94e7/importlib_metadata/_compat.py#L31
+    #
+    def clone_class(cls):
+        return type(cls)(cls.__name__, cls.__bases__, cls.__dict__.copy())
 
-    # While pkg_resources.__getstate__ and pkg_resources.__setstate__
-    # do not appear to be a documented part of the pkg_resources API,
-    # they are used in setuptools' own tests, and appear to have been
-    # a stable feature since 2011.
-    saved_state = pkg_resources.__getstate__()
-    yield
-    pkg_resources.__setstate__(saved_state)
+    sys.meta_path[:] = [
+        clone_class(finder) if isinstance(finder, type) else finder
+        for finder in meta_path
+    ]
+
+    try:
+        yield
+    finally:
+        importlib.invalidate_caches()
+
+        # NB: Restore sys.modules, sys.path, et. all. in place. (Some modules may hold
+        # references to these — e.g. pickle appears to hold a reference to sys.modules.)
+        for module in set(sys.modules).difference(modules):
+            del sys.modules[module]
+        sys.modules.update(modules)
+        sys.path[:] = path
+        sys.meta_path[:] = meta_path
+        sys.path_hooks[:] = path_hooks
+        sys.path_importer_cache.clear()
+
+
+_initial_path_key = object()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    item.stash[_initial_path_key] = sys.path.copy()
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_runtest_teardown(item):
+    # Check that tests don't alter sys.path
+    initial_path = item.stash[_initial_path_key]
+    assert sys.path == initial_path
+
+
+@pytest.fixture
+def save_sys_path():
+    with restore_import_state():
+        yield
+
+
+# Fix for spurious failures in pytest_runtest_teardown sanity-check:
+#
+# Import setuptools early to pre-mangle sys.path.  This avoids mangling of sys.path
+# during a test run, if setuptools is imported during the run.
+#
+# Details:
+# - Setuptools>=71 adds its _vendor subdirectory to sys.path when imported.
+# - When running under python < 3.12, setuptools can be imported during execution of
+#   import statements.  (This appears to happen, somehow, through setuptools'
+#   _distutils_hack:DistUtilsMetafinder:find_spec.)
+with suppress(ModuleNotFoundError):
+    __import__("setuptools")
+
+
+@pytest.fixture(scope="session")
+def project(data_path):
+    return Project.from_path(data_path / "demo-project")
 
 
 @pytest.fixture(scope="function")
-def project():
-    return Project.from_path(os.path.join(os.path.dirname(__file__), "demo-project"))
+def scratch_project_data(tmp_path):
+    base = tmp_path / "scratch-proj"
 
+    def write_text(path, text):
+        filename = base / path
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        filename.write_text(textwrap.dedent(text), "utf-8")
 
-@pytest.fixture(scope="function")
-def scratch_project_data(tmpdir):
-    base = tmpdir.mkdir("scratch-proj")
-    lektorfile_text = textwrap.dedent(
-        u"""
+    write_text(
+        "Scratch.lektorproject",
+        """
         [project]
         name = Scratch
 
@@ -94,28 +166,28 @@ def scratch_project_data(tmpdir):
         primary = yes
         [alternatives.de]
         url_prefix = /de/
-    """
+        """,
     )
-    base.join("Scratch.lektorproject").write_text(lektorfile_text, "utf8", ensure=True)
-    content_text = textwrap.dedent(
-        u"""
+    write_text(
+        "content/contents.lr",
+        """
         _model: page
         ---
         title: Index
         ---
         body: *Hello World!*
-    """
+        """,
     )
-    base.join("content", "contents.lr").write_text(content_text, "utf8", ensure=True)
-    template_text = textwrap.dedent(
-        u"""
+    write_text(
+        "templates/page.html",
+        """
         <h1>{{ this.title }}</h1>
         {{ this.body }}
-    """
+        """,
     )
-    base.join("templates", "page.html").write_text(template_text, "utf8", ensure=True)
-    model_text = textwrap.dedent(
-        u"""
+    write_text(
+        "models/page.ini",
+        """
         [model]
         label = {{ this.title }}
 
@@ -123,17 +195,15 @@ def scratch_project_data(tmpdir):
         type = string
         [fields.body]
         type = markdown
-    """
+        """,
     )
-    base.join("models", "page.ini").write_text(model_text, "utf8", ensure=True)
 
     return base
 
 
 @pytest.fixture(scope="function")
 def scratch_project(scratch_project_data):
-    base = scratch_project_data
-    return Project.from_path(str(base))
+    return Project.from_path(scratch_project_data)
 
 
 @pytest.fixture(scope="function")
@@ -162,26 +232,38 @@ def scratch_tree(scratch_pad):
 
 
 @pytest.fixture(scope="function")
-def builder(tmpdir, pad):
-    return Builder(pad, str(tmpdir.mkdir("output")))
+def builder(tmp_path, pad):
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    return Builder(pad, str(output_path))
+
+
+@pytest.fixture(scope="session")
+def built_demo(tmp_path_factory, project):
+    output_path = tmp_path_factory.mktemp("demo-output")
+    with restore_import_state():
+        env = Environment(project)
+        builder = Builder(env.new_pad(), os.fspath(output_path))
+        builder.build_all()
+    return output_path
 
 
 @pytest.fixture(scope="function")
-def scratch_builder(tmpdir, scratch_pad):
-    return Builder(scratch_pad, str(tmpdir.mkdir("output")))
+def scratch_builder(tmp_path, scratch_pad):
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    return Builder(scratch_pad, str(output_path))
 
 
 # Builder for child-sources-test-project, a project to test that child sources
 # are built even if they're filtered out by a pagination query.
 @pytest.fixture(scope="function")
-def child_sources_test_project_builder(tmpdir):
-    project = Project.from_path(
-        os.path.join(os.path.dirname(__file__), "child-sources-test-project")
-    )
-    env = Environment(project)
-    pad = Database(env).new_pad()
-
-    return Builder(pad, str(tmpdir.mkdir("output")))
+def child_sources_test_project_builder(tmp_path, data_path, save_sys_path):
+    output_path = tmp_path / "output"
+    output_path.mkdir()
+    project = Project.from_path(data_path / "child-sources-test-project")
+    pad = project.make_env().new_pad()
+    return Builder(pad, str(output_path))
 
 
 @pytest.fixture(scope="function")
@@ -214,3 +296,15 @@ def project_cli_runner(isolated_cli_runner, project, save_sys_path):
         else:
             shutil.copy2(entry_path, entry)
     return isolated_cli_runner
+
+
+@pytest.fixture
+def no_utils(monkeypatch):
+    """Monkeypatch $PATH to hide any installed external utilities
+    (e.g. git, ffmpeg)."""
+    monkeypatch.setitem(os.environ, "PATH", "/dev/null")
+    locate_executable.cache_clear()
+    try:
+        yield
+    finally:
+        locate_executable.cache_clear()

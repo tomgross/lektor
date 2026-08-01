@@ -1,31 +1,32 @@
 # pylint: disable=import-outside-toplevel
-import itertools
 import os
 import sys
-import time
 import warnings
+from importlib import metadata
+from itertools import chain
 
 import click
-import pkg_resources
 
 from lektor.cli_utils import AliasedGroup
-from lektor.cli_utils import buildflag
 from lektor.cli_utils import echo_json
 from lektor.cli_utils import extraflag
 from lektor.cli_utils import pass_context
 from lektor.cli_utils import pruneflag
+from lektor.cli_utils import ResolvedPath
 from lektor.cli_utils import validate_language
+from lektor.devcli import cli as devcli
 from lektor.project import Project
-from lektor.utils import profile_func
 from lektor.utils import secure_url
 
 
-version = pkg_resources.get_distribution("Lektor").version  # pylint: disable=no-member
+version = metadata.version("Lektor")
 
 
 @click.group(cls=AliasedGroup)
 @click.option(
-    "--project", type=click.Path(), help="The path to the lektor project to work with."
+    "--project",
+    type=click.Path(exists=True),
+    help="The path to the lektor project to work with.",
 )
 @click.option(
     "--language",
@@ -41,7 +42,8 @@ def cli(ctx, project=None, language=None):
     This command can invoke lektor locally and serve up the website.  It's
     intended for local development of websites.
     """
-    warnings.simplefilter("default")
+    if not sys.warnoptions:
+        warnings.simplefilter("default")
     if language is not None:
         ctx.ui_lang = language
     if project is not None:
@@ -50,7 +52,11 @@ def cli(ctx, project=None, language=None):
 
 @cli.command("build")
 @click.option(
-    "-O", "--output-path", type=click.Path(), default=None, help="The output path."
+    "-O",
+    "--output-path",
+    type=ResolvedPath(writable=True, file_okay=False),
+    default=None,
+    help="The output path.",
 )
 @click.option(
     "--watch",
@@ -77,27 +83,24 @@ def cli(ctx, project=None, language=None):
 )
 @click.option(
     "--buildstate-path",
-    type=click.Path(),
+    type=click.Path(writable=True, file_okay=False),
     default=None,
     help="Path to a directory that Lektor will use for coordinating "
     "the state of the build. Defaults to a directory named "
     "`.lektor` inside the output path.",
 )
 @extraflag
-@buildflag
-@click.option("--profile", is_flag=True, help="Enable build profiler.")
 @pass_context
 def build_cmd(
     ctx,
+    *,
     output_path,
     watch,
     prune,
     verbosity,
     source_info_only,
     buildstate_path,
-    profile,
     extra_flags,
-    build_flags,
 ):
     """Builds the entire project into the final artifacts.
 
@@ -119,8 +122,6 @@ def build_cmd(
     from lektor.builder import Builder
     from lektor.reporter import CliReporter
 
-    extra_flags = tuple(itertools.chain(extra_flags or (), build_flags or ()))
-
     if output_path is None:
         output_path = ctx.get_default_output_path()
 
@@ -128,44 +129,43 @@ def build_cmd(
 
     env = ctx.get_env()
 
-    def _build():
-        builder = Builder(
-            env.new_pad(),
-            output_path,
-            buildstate_path=buildstate_path,
-            extra_flags=extra_flags,
-        )
-        if source_info_only:
-            builder.update_all_source_infos()
-            return True
+    with CliReporter(env, verbosity=verbosity):
+        builds = ["first"]
+        if watch:
+            from lektor.watcher import watch_project
 
-        if profile:
-            failures = profile_func(builder.build_all)
-        else:
-            failures = builder.build_all()
-        if prune:
-            builder.prune()
-        return failures == 0
+            click.secho("Watching for file system changes", fg="cyan")
+            builds = chain(
+                builds, watch_project(env, output_path, raise_interrupt=False)
+            )
 
-    reporter = CliReporter(env, verbosity=verbosity)
-    with reporter:
-        success = _build()
-        if not watch:
-            return sys.exit(0 if success else 1)
+        success = False
+        for _ in builds:
+            builder = Builder(
+                env.new_pad(),
+                output_path,
+                buildstate_path=buildstate_path,
+                extra_flags=extra_flags,
+            )
+            if source_info_only:
+                builder.update_all_source_infos()
+                success = True
+            else:
+                failures = builder.build_all()
+                if prune:
+                    builder.prune()
+                success = failures == 0
 
-        from lektor.watcher import watch
-
-        click.secho("Watching for file system changes", fg="cyan")
-        last_build = time.time()
-        for ts, _, _ in watch(env):
-            if ts > last_build:
-                _build()
-                last_build = time.time()
+        return sys.exit(0 if success else 1)
 
 
 @cli.command("clean")
 @click.option(
-    "-O", "--output-path", type=click.Path(), default=None, help="The output path."
+    "-O",
+    "--output-path",
+    type=ResolvedPath(writable=True, file_okay=False),
+    default=None,
+    help="The output path.",
 )
 @click.option(
     "-v",
@@ -177,7 +177,7 @@ def build_cmd(
 @click.confirmation_option(help="Confirms the cleaning.")
 @extraflag
 @pass_context
-def clean_cmd(ctx, output_path, verbosity, extra_flags):
+def clean_cmd(ctx, *, output_path, verbosity, extra_flags):
     """Cleans the entire build folder.
 
     If not build folder is provided, the default build folder of the project
@@ -201,7 +201,11 @@ def clean_cmd(ctx, output_path, verbosity, extra_flags):
 @cli.command("deploy", short_help="Deploy the website.")
 @click.argument("server", required=False)
 @click.option(
-    "-O", "--output-path", type=click.Path(), default=None, help="The output path."
+    "-O",
+    "--output-path",
+    type=ResolvedPath(writable=True, file_okay=False),
+    default=None,
+    help="The output path.",
 )
 @click.option(
     "--username",
@@ -211,7 +215,7 @@ def clean_cmd(ctx, output_path, verbosity, extra_flags):
 @click.option(
     "--password",
     envvar="LEKTOR_DEPLOY_PASSWORD",
-    help="An optional password to override the URL or the " "default prompt.",
+    help="An optional password to override the URL or the default prompt.",
 )
 @click.option(
     "--key-file",
@@ -227,7 +231,7 @@ def clean_cmd(ctx, output_path, verbosity, extra_flags):
 )
 @extraflag
 @pass_context
-def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
+def deploy_cmd(ctx, *, server, output_path, extra_flags, **credentials):
     """This command deploys the entire contents of the build folder
     (`--output-path`) onto a configured remote server.  The name of the
     server must fit the name from a target in the project configuration.
@@ -242,7 +246,8 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
 
     For more information see the deployment chapter in the documentation.
     """
-    from lektor.publisher import publish, PublishError
+    from lektor.publisher import publish
+    from lektor.publisher import PublishError
 
     if output_path is None:
         output_path = ctx.get_default_output_path()
@@ -261,7 +266,7 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
         server_info = config.get_server(server)
         if server_info is None:
             raise click.BadParameter(
-                'Server "%s" does not exist.' % server, param_hint="server"
+                f"Server {server!r} does not exist.", param_hint="server"
             )
 
     try:
@@ -273,20 +278,19 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
             server_info=server_info,
             extra_flags=extra_flags,
         )
-    except PublishError as e:
-        raise click.UsageError(
-            'Server "%s" is not configured for a valid '
-            "publishing method: %s" % (server, e)
-        )
+    except PublishError as exc:
+        server_desc = "Default server" if server is None else f"Server {server!r}"
+        message = f"{server_desc} configuration error: {exc}"
+        raise click.UsageError(message) from exc
 
-    click.echo("Deploying to %s" % server_info.name)
-    click.echo("  Build cache: %s" % output_path)
-    click.echo("  Target: %s" % secure_url(server_info.target))
+    click.echo(f"Deploying to {server_info.name}")
+    click.echo(f"  Build cache: {output_path}")
+    click.echo(f"  Target: {secure_url(server_info.target)}")
     try:
         for line in event_iter:
-            click.echo("  %s" % click.style(line, fg="cyan"))
+            click.echo(f"  {click.style(line, fg='cyan')}")
     except PublishError as e:
-        click.secho("Error: %s" % e, fg="red")
+        click.secho(f"Error: {e}", fg="red")
     else:
         click.echo("Done!")
 
@@ -306,7 +310,7 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
 @click.option(
     "-O",
     "--output-path",
-    type=click.Path(),
+    type=ResolvedPath(writable=True, file_okay=False),
     default=None,
     help="The dev server will build into the same folder as "
     "the build command by default.",
@@ -320,12 +324,9 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
     help="Increases the verbosity of the logging.",
 )
 @extraflag
-@buildflag
 @click.option("--browse", is_flag=True)
 @pass_context
-def server_cmd(
-    ctx, host, port, output_path, prune, verbosity, extra_flags, build_flags, browse
-):
+def server_cmd(ctx, *, host, port, output_path, prune, verbosity, extra_flags, browse):
     """The server command will launch a local server for development.
 
     Lektor's development server will automatically build all files into
@@ -335,12 +336,11 @@ def server_cmd(
     """
     from lektor.devserver import run_server
 
-    extra_flags = tuple(itertools.chain(extra_flags or (), build_flags or ()))
     if output_path is None:
         output_path = ctx.get_default_output_path()
     ctx.load_plugins(extra_flags=extra_flags)
-    click.echo(" * Project path: %s" % ctx.get_project().project_path)
-    click.echo(" * Output path: %s" % output_path)
+    click.echo(f" * Project path: {ctx.get_project().project_path}")
+    click.echo(f" * Output path: {output_path}")
     run_server(
         (host, port),
         env=ctx.get_env(),
@@ -357,67 +357,64 @@ def server_cmd(
 @cli.command("project-info", short_help="Shows the info about a project.")
 @click.option("as_json", "--json", is_flag=True, help="Prints out the data as json.")
 @click.option(
-    "ops",
     "--name",
     is_flag=True,
-    multiple=True,
-    flag_value="name",
     help="Print the project name",
 )
 @click.option(
-    "ops",
     "--project-file",
     is_flag=True,
-    multiple=True,
-    flag_value="project_file",
     help="Print the path to the project file.",
 )
 @click.option(
-    "ops",
     "--tree",
     is_flag=True,
-    multiple=True,
-    flag_value="tree",
     help="Print the path to the tree.",
 )
 @click.option(
-    "ops",
+    "default_output_path",
     "--output-path",
     is_flag=True,
-    multiple=True,
-    flag_value="default_output_path",
     help="Print the path to the default output path.",
 )
+@click.option(
+    "package_cache_path",
+    "--package-cache",
+    is_flag=True,
+    help="Print the path to the package cache.",
+)
 @pass_context
-def project_info_cmd(ctx, as_json, ops):
+def project_info_cmd(ctx, *, as_json, **opts):
     """Prints out information about the project.  This is particular
     useful for script usage or for discovering information about a
     Lektor project that is not immediately obvious (like the paths
     to the default output folder).
     """
     project = ctx.get_project()
+    json_data = project.to_json()
     if as_json:
-        echo_json(project.to_json())
+        echo_json(json_data)
         return
 
+    ops = [k for k, v in opts.items() if v]
     if ops:
-        data = project.to_json()
         for op in ops:
-            click.echo(data.get(op, ""))
+            click.echo(json_data.get(op, ""))
     else:
-        click.echo("Name: %s" % project.name)
-        click.echo("File: %s" % project.project_file)
-        click.echo("Tree: %s" % project.tree)
-        click.echo("Output: %s" % project.get_output_path())
+        click.echo(f"Name: {json_data['name']}")
+        click.echo(f"File: {json_data['project_file']}")
+        click.echo(f"Tree: {json_data['tree']}")
+        click.echo(f"Output: {json_data['default_output_path']}")
+        click.echo(f"Package Cache: {json_data['package_cache_path']}")
 
 
 @cli.command(
-    "content-file-info", short_help="Provides information for " "a set of lektor files."
+    "content-file-info", short_help="Provides information for a set of lektor files."
 )
 @click.option("as_json", "--json", is_flag=True, help="Prints out the data as json.")
-@click.argument("files", nargs=-1, type=click.Path())
+@click.argument("files", nargs=-1, type=click.Path(dir_okay=False))
 @pass_context
-def content_file_info_cmd(ctx, files, as_json):
+def content_file_info_cmd(ctx, files, *, as_json):
     """Given a list of files this returns the information for those files
     in the context of a project.  If the files are from different projects
     an error is generated.
@@ -428,7 +425,7 @@ def content_file_info_cmd(ctx, files, as_json):
         if as_json:
             echo_json({"success": False, "error": msg})
             sys.exit(1)
-        raise click.UsageError("Could not find content file info: %s" % msg)
+        raise click.UsageError(f"Could not find content file info: {msg}")
 
     for filename in files:
         this_project = Project.discover(filename)
@@ -461,12 +458,12 @@ def content_file_info_cmd(ctx, files, as_json):
         )
     else:
         click.echo("Project:")
-        click.echo("  Name: %s" % project.name)
-        click.echo("  File: %s" % project.project_file)
-        click.echo("  Tree: %s" % project.tree)
+        click.echo(f"  Name: {project.name}")
+        click.echo(f"  File: {project.project_file}")
+        click.echo(f"  Tree: {project.tree}")
         click.echo("Paths:")
         for project_file in project_files:
-            click.echo("  - %s" % project_file)
+            click.echo(f"  - {project_file}")
 
 
 @cli.group("plugins", short_help="Manages plugins.")
@@ -494,14 +491,10 @@ def plugins_add_cmd(ctx, name):
     try:
         info = add_package_to_project(project, name)
     except RuntimeError as e:
-        click.echo("Error: %s" % e, err=True)
+        click.echo(f"Error: {e}", err=True)
     else:
         click.echo(
-            "Package %s (%s) was added to the project"
-            % (
-                info["name"],
-                info["version"],
-            )
+            f"Package {info['name']} ({info['version']}) was added to the project"
         )
 
 
@@ -518,20 +511,14 @@ def plugins_remove_cmd(ctx, name):
     try:
         old_info = remove_package_from_project(project, name)
     except RuntimeError as e:
-        click.echo("Error: %s" % e, err=True)
+        click.echo(f"Error: {e}", err=True)
     else:
         if old_info is None:
             click.echo(
-                "Package was not registered with the project.  " "Nothing was removed."
+                "Package was not registered with the project. Nothing was removed."
             )
         else:
-            click.echo(
-                "Removed package %s (%s)"
-                % (
-                    old_info["name"],
-                    old_info["version"],
-                )
-            )
+            click.echo(f"Removed package {old_info['name']} ({old_info['version']})")
 
 
 @plugins_cmd.command("list", short_help="List all plugins.")
@@ -544,7 +531,7 @@ def plugins_remove_cmd(ctx, name):
     help="Increases the verbosity of the output.",
 )
 @pass_context
-def plugins_list_cmd(ctx, as_json, verbosity):
+def plugins_list_cmd(ctx, *, as_json, verbosity):
     """This returns a list of all currently actively installed plugins
     in the project.  By default it only prints out the plugin IDs and
     version numbers but the entire information can be returned by
@@ -561,24 +548,22 @@ def plugins_list_cmd(ctx, as_json, verbosity):
 
     if verbosity == 0:
         for plugin in plugins:
-            click.echo("%s (version %s)" % (plugin.id, plugin.version))
+            click.echo(f"{plugin.id} (version {plugin.version})")
         return
 
     for idx, plugin in enumerate(plugins):
         if idx:
             click.echo()
-        click.echo("%s (%s)" % (plugin.name, plugin.id))
+        click.echo(f"{plugin.name} ({plugin.id})")
         for line in plugin.description.splitlines():
-            click.echo("  %s" % line)
+            click.echo(f"  {line}")
         if plugin.path is not None:
-            click.echo("  path: %s" % plugin.path)
-        click.echo("  version: %s" % plugin.version)
-        click.echo("  import-name: %s" % plugin.import_name)
+            click.echo(f"  path: {plugin.path}")
+        click.echo(f"  version: {plugin.version}")
+        click.echo(f"  import-name: {plugin.import_name}")
 
 
-@plugins_cmd.command(
-    "flush-cache", short_help="Flushes the plugin " "installation cache."
-)
+@plugins_cmd.command("flush-cache", short_help="Flushes the plugin installation cache.")
 @pass_context
 def plugins_flush_cache_cmd(ctx):
     """This uninstalls all plugins in the cache.  On next usage the plugins
@@ -606,7 +591,11 @@ def plugins_reinstall_cmd(ctx):
 
 @cli.command("quickstart", short_help="Starts a new empty project.")
 @click.option("--name", help="The name of the project.")
-@click.option("--path", type=click.Path(), help="Output directory")
+@click.option(
+    "--path",
+    type=click.Path(file_okay=False, dir_okay=False, writable=True),
+    help="Output directory",
+)
 @pass_context
 def quickstart_cmd(ctx, **options):
     """Starts a new empty project with a minimum boilerplate."""
@@ -614,8 +603,6 @@ def quickstart_cmd(ctx, **options):
 
     project_quickstart(options)
 
-
-from .devcli import cli as devcli  # pylint: disable=wrong-import-position
 
 cli.add_command(devcli, "dev")
 

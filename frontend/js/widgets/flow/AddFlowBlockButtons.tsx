@@ -11,7 +11,7 @@ export default function AddFlowBlockButtons({
   flowblocks: Record<string, FlowBlockModel>;
   flowblock_order: string[];
   addBlock: (model: FlowBlockModel) => void;
-}): JSX.Element {
+}): React.JSX.Element {
   const models = flowblock_order.map((key) => flowblocks[key]);
   return (
     <div className="add-flow-block">
@@ -25,7 +25,9 @@ export default function AddFlowBlockButtons({
             <button
               type="button"
               className="btn btn-secondary border"
-              onClick={() => addBlock(model)}
+              onClick={() => {
+                addBlock(model);
+              }}
               title={trans_obj(model.name_i18n)}
               key={model.id}
             >

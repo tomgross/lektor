@@ -4,8 +4,11 @@ import hashlib
 import mimetypes
 import os
 
+from lektor.utils import deprecated
+
 
 class FileContents:
+    @deprecated(name="FileContents", version="3.4.0")
     def __init__(self, filename):
         self.filename = filename
         self._md5 = None
@@ -36,16 +39,13 @@ class FileContents:
     def bytes(self):
         try:
             return os.stat(self.filename).st_size
-        except (OSError, IOError):
+        except OSError:
             return 0
 
     def as_data_url(self, mediatype=None):
         if mediatype is None:
             mediatype = self.mimetype
-        return "data:%s;base64,%s" % (
-            mediatype,
-            self.as_base64(),
-        )
+        return f"data:{mediatype};base64,{self.as_base64()}"
 
     def as_text(self):
         with self.open() as f:
@@ -63,6 +63,7 @@ class FileContents:
             return open(self.filename, "rb")
         if mode != "r":
             raise TypeError("Can only open files for reading")
+        # pylint: disable=deprecated-method
         return codecs.open(self.filename, encoding=encoding or "utf-8")
 
     def _ensure_hashes(self):
@@ -86,7 +87,4 @@ class FileContents:
             )
 
     def __repr__(self):
-        return "<FileContents %r md5=%r>" % (
-            self.filename,
-            self.md5,
-        )
+        return f"<FileContents {self.filename!r} md5={self.md5!r}>"

@@ -10,7 +10,7 @@ export default function Refresh({
 }: {
   dismiss: () => void;
   preventNavigation: (v: boolean) => void;
-}): JSX.Element {
+}): React.JSX.Element {
   const [state, setState] = useState<"IDLE" | "DONE" | "CLEANING">("IDLE");
   const isSafeToNavigate = state === "IDLE" || state === "DONE";
 
@@ -20,10 +20,9 @@ export default function Refresh({
       setState("DONE");
     }, showErrorDialog);
   }, []);
-  useEffect(
-    () => preventNavigation(!isSafeToNavigate),
-    [preventNavigation, isSafeToNavigate]
-  );
+  useEffect(() => {
+    preventNavigation(!isSafeToNavigate);
+  }, [preventNavigation, isSafeToNavigate]);
 
   return (
     <SlideDialog

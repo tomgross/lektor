@@ -15,7 +15,7 @@ const alertErr = (text: string) => {
   alert(trans("ERROR_PREFIX") + text);
 };
 
-function AddChildPage(): JSX.Element | null {
+function AddChildPage(): React.JSX.Element | null {
   const { path, alt } = useRecord();
 
   const [newChildInfo, setNewChildInfo] = useState<NewRecordInfo | null>(null);
@@ -73,7 +73,7 @@ function AddChildPage(): JSX.Element | null {
           goToAdminPage("edit", path, alt);
         }
       },
-      showErrorDialog
+      showErrorDialog,
     );
   }, [
     alt,

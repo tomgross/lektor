@@ -108,7 +108,7 @@ class BuildProgram:
             _build(artifact, build_func)
 
         # If we failed anywhere we want to mark *all* artifacts as dirty.
-        # This means that if a sub-artifact failes we also rebuild the
+        # This means that if a sub-artifact fails we also rebuild the
         # parent next time around.
         if failures:
             for artifact in self.artifacts:
@@ -185,7 +185,7 @@ class PageBuildProgram(BuildProgram):
             raise BuildError(
                 "The URL for this record contains non ASCII "
                 "characters.  This is currently not supported "
-                "for portability reasons (%r)." % self.source.url_path
+                f"for portability reasons ({self.source.url_path!r})."
             ) from error
 
         artifact.render_template_into(self.source["_template"], this=self.source)
@@ -217,6 +217,7 @@ class PageBuildProgram(BuildProgram):
         # If pagination is disabled, all children and attachments are linked
         # to this page.
         all_children = self.source.children.include_undiscoverable(True)
+        all_children = all_children.include_hidden(True)
         if pagination_enabled:
             if self.source.page_num is None:
                 child_sources.append(self._iter_paginated_children())

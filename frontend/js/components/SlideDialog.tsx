@@ -11,7 +11,7 @@ export default function SlideDialog({
   hasCloseButton: boolean;
   dismiss: () => void;
   children: ReactNode;
-}): JSX.Element {
+}): React.JSX.Element {
   useEffect(() => {
     const handler = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
@@ -20,7 +20,9 @@ export default function SlideDialog({
       }
     };
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+    return () => {
+      window.removeEventListener("keydown", handler);
+    };
   }, [dismiss]);
 
   useEffect(() => {

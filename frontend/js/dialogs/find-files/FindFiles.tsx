@@ -15,13 +15,13 @@ import ResultRow from "./ResultRow";
 import { useGoToAdminPage } from "../../components/use-go-to-admin-page";
 import { PageContext } from "../../context/page-context";
 
-export type SearchResult = {
+export interface SearchResult {
   parents: { title: string }[];
   path: RecordPath;
   title: string;
-};
+}
 
-function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
+function FindFiles({ dismiss }: { dismiss: () => void }): React.JSX.Element {
   const alt = useRecordAlt();
   const page = useContext(PageContext);
 
@@ -35,6 +35,7 @@ function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
 
   useEffect(() => {
     if (!query) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setResults([]);
       setSelected(-1);
       return;
@@ -48,7 +49,7 @@ function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
           setSelected((selected) => Math.min(selected, results.length - 1));
         }
       },
-      showErrorDialog
+      showErrorDialog,
     );
     return () => {
       ignore = true;
@@ -63,7 +64,7 @@ function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setSelected(
-          (selected) => (selected - 1 + results.length) % results.length
+          (selected) => (selected - 1 + results.length) % results.length,
         );
       } else if (event.key === "Enter") {
         const item = results[selected];
@@ -73,7 +74,7 @@ function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
         }
       }
     },
-    [alt, dismiss, goToAdminPage, results, selected, target]
+    [alt, dismiss, goToAdminPage, results, selected, target],
   );
 
   return (
@@ -83,7 +84,9 @@ function FindFiles({ dismiss }: { dismiss: () => void }): JSX.Element {
         autoFocus
         className="form-control"
         value={query}
-        onChange={(ev) => setQuery(ev.target.value)}
+        onChange={(ev) => {
+          setQuery(ev.target.value);
+        }}
         onKeyDown={onInputKey}
         placeholder={trans("FIND_FILES_PLACEHOLDER")}
       />

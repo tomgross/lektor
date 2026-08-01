@@ -23,14 +23,10 @@ def get_asset_url(asset):
     ctx = get_ctx()
     if ctx is None:
         raise RuntimeError("No context found")
-    asset = site_proxy.get_asset(asset)
+    asset = ctx.pad.get_asset(asset)
     if asset is None:
         return Undefined("Asset not found")
-    info = ctx.build_state.get_file_info(asset.source_filename)
-    return "%s?h=%s" % (
-        ctx.source.url_to("!" + asset.url_path),
-        info.checksum[:8],
-    )
+    return ctx.get_asset_url(asset)
 
 
 @LocalProxy
@@ -78,7 +74,7 @@ class Context:
         if pad is None:
             if artifact is None:
                 raise TypeError(
-                    "Either artifact or pad is needed to " "construct a context."
+                    "Either artifact or pad is needed to construct a context."
                 )
             pad = artifact.build_state.pad
 
@@ -97,12 +93,13 @@ class Context:
 
         # Processing information
         self.referenced_dependencies = set()
-        self.referenced_virtual_dependencies = {}
+        self.referenced_virtual_dependencies = set()
         self.sub_artifacts = []
 
         self.flow_block_render_stack = []
 
         self._forced_base_url = None
+        self._resolving_url = False
 
         # General cache system where other things can put their temporary
         # stuff in.
@@ -158,21 +155,48 @@ class Context:
             return self.source.url_path
         return "/"
 
-    def url_to(self, path, alt=None, absolute=None, external=None):
+    def url_to(
+        self,
+        path,
+        alt=None,
+        absolute=None,
+        external=None,
+        resolve=None,
+        strict_resolve=None,
+    ):
         """Returns a URL to another path."""
         if self.source is None:
             raise RuntimeError(
                 "Can only generate paths to other pages if "
                 "the context has a source document set."
             )
-        rv = self.source.url_to(path, alt=alt, absolute=True)
-        return self.pad.make_url(rv, self.base_url, absolute, external)
+        return self.source.url_to(
+            path,
+            alt=alt,
+            base_url=self.base_url,
+            absolute=absolute,
+            external=external,
+            resolve=resolve,
+            strict_resolve=strict_resolve,
+        )
+
+    def get_asset_url(self, asset):
+        """Calculates the asset URL relative to the current record."""
+        if self.source is None:
+            raise RuntimeError(
+                "Can only generate paths to assets if "
+                "the context has a source document set."
+            )
+        asset_url = self.source.url_to("!" + asset.url_path)
+        info = self.build_state.get_file_info(asset.source_filename)
+        self.record_dependency(asset.source_filename)
+        return f"{asset_url}?h={info.checksum[:8]}"
 
     def sub_artifact(self, *args, **kwargs):
         """Decorator version of :func:`add_sub_artifact`."""
 
         def decorator(f):
-            self.add_sub_artifact(build_func=f, *args, **kwargs)
+            self.add_sub_artifact(*args, build_func=f, **kwargs)
             return f
 
         return decorator
@@ -203,16 +227,21 @@ class Context:
         self.sub_artifacts.append((aft, build_func))
         reporter.report_sub_artifact(aft)
 
-    def record_dependency(self, filename):
-        """Records a dependency from processing."""
+    def record_dependency(self, filename, affects_url=None):
+        """Records a dependency from processing.
+
+        If ``affects_url`` is set to ``False`` the dependency will be ignored if
+        we are in the process of resolving a URL.
+        """
+        if self._resolving_url and affects_url is False:
+            return
         self.referenced_dependencies.add(filename)
         for coll in self._dependency_collectors:
             coll(filename)
 
     def record_virtual_dependency(self, virtual_source):
         """Records a dependency from processing."""
-        path = virtual_source.path
-        self.referenced_virtual_dependencies[path] = virtual_source
+        self.referenced_virtual_dependencies.add(virtual_source)
         for coll in self._dependency_collectors:
             coll(virtual_source)
 
@@ -236,3 +265,17 @@ class Context:
             yield
         finally:
             self._forced_base_url = old
+
+
+@contextmanager
+def ignore_url_unaffecting_dependencies(value=True):
+    """Ignore dependencies which do not affect URL resolution within context."""
+    ctx = get_ctx()
+    if ctx is not None:
+        old = ctx._resolving_url
+        ctx._resolving_url = value
+    try:
+        yield
+    finally:
+        if ctx is not None:
+            ctx._resolving_url = old

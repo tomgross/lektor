@@ -5,8 +5,8 @@ import { trans_obj, Translatable } from "./i18n";
  * Formats a user label appropriately
  */
 export function formatUserLabel(
-  inputConfig: Translatable | string
-): JSX.Element {
+  inputConfig: Translatable | string,
+): React.JSX.Element {
   const label =
     typeof inputConfig === "string" ? inputConfig : trans_obj(inputConfig);
 

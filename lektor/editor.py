@@ -9,19 +9,22 @@ from collections.abc import KeysView
 from collections.abc import Mapping
 from collections.abc import MutableMapping
 from collections.abc import ValuesView
+from contextlib import suppress
 from functools import wraps
 from itertools import chain
 
 from lektor.constants import PRIMARY_ALT
 from lektor.metaformat import serialize
 from lektor.utils import atomic_open
+from lektor.utils import cleanup_path
 from lektor.utils import increment_filename
 from lektor.utils import is_valid_id
+from lektor.utils import parse_path
 from lektor.utils import secure_filename
 
 
-implied_keys = set(["_id", "_path", "_gid", "_alt", "_source_alt", "_attachment_for"])
-possibly_implied_keys = set(["_model", "_template", "_attachment_type"])
+implied_keys = {"_id", "_path", "_gid", "_alt", "_source_alt", "_attachment_for"}
+possibly_implied_keys = {"_model", "_template", "_attachment_type"}
 
 
 class BadEdit(Exception):
@@ -32,10 +35,21 @@ class BadDelete(BadEdit):
     pass
 
 
+def _is_valid_path(path: str) -> bool:
+    split_path = path.strip("/").split("/")
+    if split_path == [""]:
+        split_path = []
+    return parse_path(path) == split_path
+
+
 def make_editor_session(pad, path, is_attachment=None, alt=PRIMARY_ALT, datamodel=None):
     """Creates an editor session for the given path object."""
+    if not _is_valid_path(path):
+        raise BadEdit("Invalid path")
+    path = cleanup_path(path)
+
     if alt != PRIMARY_ALT and not pad.db.config.is_valid_alternative(alt):
-        raise BadEdit("Attempted to edit an invalid alternative (%s)" % alt)
+        raise BadEdit(f"Attempted to edit an invalid alternative ({alt})")
 
     raw_data = pad.db.load_raw_data(path, cls=OrderedDict, alt=alt, fallback=False)
     raw_data_fallback = None
@@ -71,7 +85,7 @@ def make_editor_session(pad, path, is_attachment=None, alt=PRIMARY_ALT, datamode
         # XXX: what about changing the datamodel after the fact?
         if datamodel is not None:
             raise BadEdit(
-                "When editing an existing record, a datamodel " "must not be provided."
+                "When editing an existing record, a datamodel must not be provided."
             )
         datamodel = pad.db.get_datamodel_for_raw_data(all_data, pad)
     else:
@@ -92,13 +106,13 @@ def make_editor_session(pad, path, is_attachment=None, alt=PRIMARY_ALT, datamode
         pad,
         id,
         str(path),
-        raw_data,
-        raw_data_fallback,
-        datamodel,
-        record,
-        exists,
-        is_attachment,
-        alt,
+        original_data=raw_data,
+        fallback_data=raw_data_fallback,
+        datamodel=datamodel,
+        record=record,
+        exists=exists,
+        is_attachment=is_attachment,
+        alt=alt,
     )
 
 
@@ -108,7 +122,7 @@ def _deprecated_data_proxy(wrapped):
     """
 
     name = wrapped.__name__
-    newname = name[4:] if name.startswith("iter") else name
+    newname = name.removeprefix("iter")
 
     @wraps(wrapped)
     def wrapper(self, *args, **kwargs):
@@ -116,6 +130,7 @@ def _deprecated_data_proxy(wrapped):
             f"EditorSession.{name} has been deprecated as of Lektor 3.3.2. "
             f"Please use EditorSession.data.{newname} instead.",
             DeprecationWarning,
+            stacklevel=2,
         )
         return wrapped(self, *args, **kwargs)
 
@@ -128,6 +143,7 @@ class EditorSession:
         pad,
         id,
         path,
+        *,
         original_data,
         fallback_data,
         datamodel,
@@ -211,7 +227,7 @@ class EditorSession:
         base = self.pad.db.to_fs_path(self.path)
         suffix = ".lr"
         if alt != PRIMARY_ALT:
-            suffix = "+%s%s" % (alt, suffix)
+            suffix = f"+{alt}{suffix}"
         if self.is_attachment:
             return base + suffix
         return os.path.join(base, "contents" + suffix)
@@ -292,33 +308,31 @@ class EditorSession:
         files = [self.fs_path]
         if self._master_delete:
             files.append(self.attachment_fs_path)
-            for alt in self.pad.db.config.list_alternatives():
-                files.append(self.get_fs_path(alt))
-
+            files.extend(
+                self.get_fs_path(alt) for alt in self.pad.db.config.list_alternatives()
+            )
         for fn in files:
             try:
                 os.unlink(fn)
-            except OSError:
+            except OSError:  # noqa: PERF203
                 pass
 
     def _page_delete_impl(self):
         directory = os.path.dirname(self.fs_path)
 
         if self._recursive_delete:
-            try:
+            with suppress(OSError):
                 shutil.rmtree(directory)
-            except (OSError, IOError):
-                pass
             return
         if self._master_delete:
             raise BadDelete(
-                "Master deletes of pages require that recursive " "deleting is enabled."
+                "Master deletes of pages require that recursive deleting is enabled."
             )
 
         for fn in self.fs_path, directory:
             try:
                 os.unlink(fn)
-            except OSError:
+            except OSError:  # noqa: PERF203
                 pass
 
     def _delete_impl(self):
@@ -326,12 +340,12 @@ class EditorSession:
             if self._master_delete:
                 raise BadDelete(
                     "Master deletes need to be done from the primary "
-                    'alt.  Tried to delete from "%s"' % self.alt
+                    f'alt.  Tried to delete from "{self.alt}"'
                 )
             if self._recursive_delete:
                 raise BadDelete(
                     "Cannot perform recursive delete from a non "
-                    'primary alt.  Tried to delete from "%s"' % self.alt
+                    f'primary alt.  Tried to delete from "{self.alt}"'
                 )
 
         if self.is_attachment:
@@ -356,12 +370,13 @@ class EditorSession:
                 f.write(chunk)
 
     def __repr__(self):
-        return "<%s %r%s%s>" % (
-            self.__class__.__name__,
-            self.path,
-            self.alt != PRIMARY_ALT and " alt=%r" % self.alt or "",
-            not self.exists and " new" or "",
-        )
+        bits = [repr(self.path)]
+        if self.alt != PRIMARY_ALT:
+            bits.append(f" alt={self.alt!r}")
+        if not self.exists:
+            bits.append(" new")
+
+        return f"<{self.__class__.__name__} {' '.join(bits)}>"
 
     # The mapping methods used to access the page data have been moved
     # to EditorSession.data.
@@ -427,7 +442,7 @@ del _deprecated_data_proxy
 class EditorData(Mapping):
     """A read-only view of edited data.
 
-    This is a chained dict with (possibly) mutated data overlayed on
+    This is a chained dict with (possibly) mutated data overlaid on
     the original data for the record.
     """
 
@@ -493,7 +508,7 @@ class EditorData(Mapping):
 class MutableEditorData(EditorData, MutableMapping):
     """A mutable view of edited data.
 
-    This is a chained dict with (possibly) mutated data overlayed on
+    This is a chained dict with (possibly) mutated data overlaid on
     the original data for the record.
     """
 

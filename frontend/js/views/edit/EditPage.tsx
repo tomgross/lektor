@@ -1,14 +1,12 @@
 import React, {
-  FormEvent,
   SetStateAction,
   useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
-import { Prompt } from "react-router-dom";
+import { unstable_usePrompt } from "react-router";
 
-import { keyboardShortcutHandler } from "../../utils";
 import { get, put } from "../../fetch";
 import { trans, Translatable, trans_fallback, trans_format } from "../../i18n";
 import {
@@ -22,9 +20,11 @@ import { Field, WidgetComponent } from "../../widgets/types";
 import { EditPageActions } from "./EditPageActions";
 import ToggleGroup from "../../components/ToggleGroup";
 import { useGoToAdminPage } from "../../components/use-go-to-admin-page";
+import { useChangedFlag } from "../../components/use-changed-flag";
 import { useRecord } from "../../context/record-context";
+import { setShortcutHandler, ShortcutAction } from "../../shortcut-keys";
 
-export type RawRecordInfo = {
+export interface RawRecordInfo {
   alt: string;
   can_be_deleted: boolean;
   default_template: string;
@@ -37,22 +37,22 @@ export type RawRecordInfo = {
   path: string;
   slug_format: string;
   url_path: string;
-};
+}
 
-type RecordDataModel = {
+interface RecordDataModel {
   alt: string;
   fields: Field[];
-};
+}
 
-export type RawRecord = {
+export interface RawRecord {
   datamodel: RecordDataModel;
   record_info: RawRecordInfo;
   data: Record<string, string>;
-};
+}
 
 function legalFields(
   recordDataModel: Pick<RecordDataModel, "fields">,
-  recordInfo: Pick<RawRecordInfo, "is_attachment">
+  recordInfo: Pick<RawRecordInfo, "is_attachment">,
 ) {
   function isLegalField(field: Field): boolean {
     switch (field.name) {
@@ -75,7 +75,7 @@ function legalFields(
 function getPlaceholderForField(
   recordInfo: RawRecordInfo,
   Widget: WidgetComponent,
-  field: Field
+  field: Field,
 ): string | null {
   if (field.default !== null) {
     if (Widget.deserializeValue) {
@@ -95,7 +95,7 @@ function getPlaceholderForField(
 function getValueForField(
   recordData: Record<string, string>,
   Widget: WidgetComponent,
-  field: Field
+  field: Field,
 ) {
   let value = recordData[field.name];
   if (value === undefined) {
@@ -105,6 +105,22 @@ function getValueForField(
     }
   }
   return value;
+}
+
+function getRecordData({ data, datamodel, record_info }: RawRecord) {
+  // transform response data into actual data
+  const recordData: Record<string, string> = {};
+  legalFields(datamodel, record_info).forEach((field) => {
+    const Widget = getWidgetComponentWithFallback(field.type);
+    let value = data[field.name];
+    if (value !== undefined) {
+      if (Widget.deserializeValue) {
+        value = Widget.deserializeValue(value, field.type);
+      }
+      recordData[field.name] = value;
+    }
+  });
+  return recordData;
 }
 
 function getValues({
@@ -138,7 +154,7 @@ function getValues({
   return rv;
 }
 
-function EditPage(): JSX.Element | null {
+function EditPage(): React.JSX.Element | null {
   const { path, alt } = useRecord();
 
   const form = useRef<HTMLFormElement | null>(null);
@@ -146,56 +162,36 @@ function EditPage(): JSX.Element | null {
   const [recordData, setRecordData] = useState<Record<string, string>>({});
   const [recordDataModel, setRecordDataModel] =
     useState<RecordDataModel | null>(null);
-  const [recordInfo, setRecordnfo] = useState<RawRecordInfo | null>(null);
-  const [hasPendingChanges, setHasPendingChanges] = useState(false);
+  const [recordInfo, setRecordInfo] = useState<RawRecordInfo | null>(null);
 
+  const [hasPendingChanges, setDirty, setClean] = useChangedFlag();
   const goToAdminPage = useGoToAdminPage();
+
+  unstable_usePrompt({
+    when: hasPendingChanges,
+    message: trans("UNLOAD_ACTIVE_TAB"),
+  });
 
   useEffect(() => {
     let ignore = false;
-    get("/rawrecord", { path, alt }).then(
-      ({ datamodel, data, record_info }) => {
+    setClean(
+      async () => {
+        const rawrecord = await get("/rawrecord", { path, alt }).catch(
+          showErrorDialog,
+        );
         if (!ignore) {
-          // transform response data into actual data
-          const recordData: Record<string, string> = {};
-          legalFields(datamodel, record_info).forEach((field) => {
-            const Widget = getWidgetComponentWithFallback(field.type);
-            let value = data[field.name];
-            if (value !== undefined) {
-              if (Widget.deserializeValue) {
-                value = Widget.deserializeValue(value, field.type);
-              }
-              recordData[field.name] = value;
-            }
-          });
-          setRecordData(recordData);
-          setRecordDataModel(datamodel);
-          setRecordnfo(record_info);
-          setHasPendingChanges(false);
+          setRecordData(getRecordData(rawrecord));
+          setRecordDataModel(rawrecord.datamodel);
+          setRecordInfo(rawrecord.record_info);
         }
       },
-      showErrorDialog
-    );
+      { sync: true },
+    ).catch(console.error);
 
     return () => {
       ignore = true;
     };
-  }, [alt, path]);
-
-  useEffect(() => {
-    const onKeyPress = keyboardShortcutHandler(
-      { key: "Control+s", mac: "Meta+s", preventDefault: true },
-      () => {
-        if (form.current?.reportValidity()) {
-          form.current
-            .querySelector<HTMLButtonElement>("button[type='submit']")
-            ?.click();
-        }
-      }
-    );
-    window.addEventListener("keydown", onKeyPress);
-    return () => window.removeEventListener("keydown", onKeyPress);
-  }, []);
+  }, [alt, path, setClean]);
 
   const setFieldValue = useCallback(
     (fieldName: string, value: SetStateAction<string>) => {
@@ -203,22 +199,50 @@ function EditPage(): JSX.Element | null {
         ...r,
         [fieldName]: typeof value === "function" ? value(r[fieldName]) : value,
       }));
-      setHasPendingChanges(true);
+      setDirty();
     },
-    []
+    [setDirty],
   );
 
-  const saveChanges = useCallback(
-    (ev: FormEvent) => {
-      ev.preventDefault();
-      const data = getValues({ recordDataModel, recordInfo, recordData });
-      put("/rawrecord", { data, path, alt }).then(() => {
-        setHasPendingChanges(false);
-        goToAdminPage("preview", path, alt);
-      }, showErrorDialog);
-    },
-    [alt, goToAdminPage, path, recordData, recordDataModel, recordInfo]
-  );
+  const maybeSaveChanges = useCallback(async () => {
+    if (hasPendingChanges) {
+      return setClean(
+        async () => {
+          const data = getValues({ recordDataModel, recordInfo, recordData });
+          await put("/rawrecord", { data, path, alt }).catch(showErrorDialog);
+        },
+        { sync: true },
+      );
+    }
+  }, [
+    path,
+    alt,
+    hasPendingChanges,
+    setClean,
+    recordData,
+    recordDataModel,
+    recordInfo,
+  ]);
+
+  useEffect(() => {
+    const saveAndPreview = async () => {
+      await maybeSaveChanges();
+      goToAdminPage("preview", path, alt);
+    };
+    const cleanup = [
+      setShortcutHandler(ShortcutAction.Save, () => {
+        maybeSaveChanges().catch(console.error);
+      }),
+      setShortcutHandler(ShortcutAction.Preview, () => {
+        saveAndPreview().catch(console.error);
+      }),
+    ];
+    return () => {
+      cleanup.forEach((cb) => {
+        cb();
+      });
+    };
+  }, [maybeSaveChanges, path, alt, goToAdminPage]);
 
   const renderFormField = useCallback(
     (field: Field) => {
@@ -243,7 +267,7 @@ function EditPage(): JSX.Element | null {
         />
       );
     },
-    [recordData, recordInfo, setFieldValue]
+    [recordData, recordInfo, setFieldValue],
   );
 
   if (!recordInfo || !recordDataModel) {
@@ -262,9 +286,14 @@ function EditPage(): JSX.Element | null {
 
   return (
     <>
-      {hasPendingChanges && <Prompt message={trans("UNLOAD_ACTIVE_TAB")} />}
       <h2>{title}</h2>
-      <form ref={form} onSubmit={saveChanges}>
+      <form
+        ref={form}
+        onSubmit={(e) => {
+          e.preventDefault();
+          maybeSaveChanges().catch(console.error);
+        }}
+      >
         <FieldRows fields={normalFields} renderFunc={renderFormField} />
         {systemFields.length > 0 && (
           <ToggleGroup

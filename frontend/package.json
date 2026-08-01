@@ -2,95 +2,48 @@
   "name": "lektor",
   "license": "ISC",
   "private": true,
+  "type": "module",
   "engines": {
-    "node": ">=14"
+    "node": ">=22.18"
+  },
+  "allowScripts": {
+    "esbuild": false,
+    "@parcel/watcher": false
   },
   "dependencies": {
-    "@openfonts/roboto-slab_all": "^1.0.1"
+    "@fontsource/roboto-slab": "^5.0.3",
+    "@fortawesome/fontawesome-svg-core": "^6.4.2",
+    "@fortawesome/free-solid-svg-icons": "^6.4.2",
+    "bootstrap": "^5.3.0",
+    "font-awesome": "^4.3.0",
+    "lit": "^3.0.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-router": "^8"
   },
   "devDependencies": {
-    "@babel/core": "^7.12.13",
-    "@babel/preset-env": "^7.12.13",
-    "@babel/preset-react": "^7.12.13",
-    "@babel/preset-typescript": "^7.12.13",
-    "@babel/register": "^7.12.13",
-    "@types/jsdom": "^16.2.6",
-    "@types/mocha": "^9.0.0",
-    "@types/node": "^17.0.18",
-    "@types/react": "^17.0.1",
-    "@types/react-dom": "^17.0.0",
+    "@eslint/js": "^9.15.0",
+    "@types/jsdom": "^28.0.0",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.1.3",
+    "@types/react-dom": "^19.1.3",
     "@types/react-router-dom": "^5.1.7",
-    "@types/webpack-env": "^1.16.0",
-    "@typescript-eslint/eslint-plugin": "^5.6.0",
-    "@typescript-eslint/parser": "^5.6.0",
-    "babel-loader": "^8.2.2",
-    "babel-plugin-istanbul": "^6.0.0",
-    "bootstrap": "^5.0.2",
-    "css-loader": "^6.2.0",
-    "eslint": "^8.4.1",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.15.0",
     "eslint-plugin-react": "^7.22.0",
-    "eslint-plugin-react-hooks": "^4.2.0",
-    "font-awesome": "^4.3.0",
-    "jsdom": "^19.0.0",
-    "json-loader": "^0.5.2",
-    "mini-css-extract-plugin": "^2.1.0",
-    "mocha": "^9.0.3",
-    "nyc": "^15.1.0",
-    "prettier": "^2.2.1",
-    "react": "^17.0.1",
-    "react-dom": "^17.0.1",
-    "react-router": "^5.2.0",
-    "react-router-dom": "^5.2.0",
-    "sass": "^1.32.7",
-    "sass-loader": "^12.1.0",
-    "style-loader": "^3.2.1",
-    "typescript": "^4.1.3",
-    "webpack": "^5.21.1",
-    "webpack-cli": "^4.5.0"
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "fast-glob": "^3.2.11",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.0.0",
+    "sass": "^1.49.9",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.15.0"
   },
   "scripts": {
-    "test": "nyc mocha",
-    "report-coverage": "nyc report --reporter=lcov > coverage.lcov",
-    "dev": "webpack --watch",
-    "webpack": "webpack"
-  },
-  "targets": "defaults",
-  "babel": {
-    "presets": [
-      "@babel/preset-env",
-      "@babel/preset-react",
-      "@babel/preset-typescript"
-    ],
-    "env": {
-      "test": {
-        "plugins": [
-          "istanbul"
-        ]
-      }
-    }
-  },
-  "mocha": {
-    "spec": [
-      "js/**/*.test.ts",
-      "js/**/*.test.tsx"
-    ],
-    "require": [
-      "./babel-require.js"
-    ]
-  },
-  "nyc": {
-    "extension": [
-      ".jsx",
-      ".js",
-      ".tsx",
-      ".ts"
-    ],
-    "reporter": [
-      "text",
-      "html"
-    ],
-    "require": [
-      "./babel-require.js"
-    ]
+    "test": "tsx --test \"js/**/*.test.ts\" \"js/**/*.test.tsx\"",
+    "coverage": "tsx --experimental-test-coverage --test \"js/**/*.test.ts\" \"js/**/*.test.tsx\"",
+    "build": "node build.ts",
+    "dev": "node build.ts --watch"
   }
 }

@@ -4,25 +4,24 @@ import textwrap
 
 import pytest
 
+from lektor.assets import Asset
 from lektor.builder import Builder
 from lektor.db import Database
 from lektor.environment import Environment
 from lektor.project import Project
+from lektor.reporter import Reporter
+
 
 sep = os.path.sep
 
 
 @pytest.fixture(scope="function")
-def theme_project_tmpdir(tmpdir):
+def theme_project_tmpdir(tmp_path, data_path):
     """Copy themes-project to a temp dir, and copy demo-project content to it."""
-    themes_dir = os.path.join(os.path.dirname(__file__), "themes-project")
-    content_dir = os.path.join(os.path.dirname(__file__), "demo-project", "content")
-
-    temp_dir = tmpdir.mkdir("temp").join("themes-project")
-
-    shutil.copytree(themes_dir, str(temp_dir))
-    shutil.copytree(content_dir, str(temp_dir.join("content")))
-
+    temp_dir = tmp_path / "temp/themes-project"
+    temp_dir.parent.mkdir()
+    shutil.copytree(data_path / "themes-project", temp_dir)
+    shutil.copytree(data_path / "demo-project/content", temp_dir / "content")
     return temp_dir
 
 
@@ -39,36 +38,29 @@ def theme_project(theme_project_tmpdir, request):
 
     # Create the .lektorproject file
     lektorfile_text = textwrap.dedent(
-        u"""
+        """
         [project]
         name = Themes Project
         {}
-    """.format(
-            "themes = blog_theme, project_theme" if with_themes_var else ""
-        )
+    """.format("themes = blog_theme, project_theme" if with_themes_var else "")
     )
-
-    theme_project_tmpdir.join("themes.lektorproject").write_text(
-        lektorfile_text, "utf8", ensure=True
-    )
-    return Project.from_path(str(theme_project_tmpdir))
+    lektorfile = theme_project_tmpdir / "themes.lektorproject"
+    lektorfile.write_text(lektorfile_text, "utf8")
+    return Project.from_path(theme_project_tmpdir)
 
 
 @pytest.fixture(scope="function")
-def theme_env(theme_project):
-
+def theme_env(theme_project, save_sys_path):
     return Environment(theme_project)
 
 
 @pytest.fixture(scope="function")
 def theme_pad(theme_env):
-
     return Database(theme_env).new_pad()
 
 
 @pytest.fixture(scope="function")
 def theme_builder(theme_pad, tmpdir):
-
     return Builder(theme_pad, str(tmpdir.mkdir("output")))
 
 
@@ -210,3 +202,22 @@ def test_theme_templates_loading(theme_env, template_name, found_in):
     assert (found_in == "root") == ("themes" not in path_list)
     assert (found_in == "blog") == ("blog_theme" in path_list)
     assert (found_in == "project") == ("project_theme" in path_list)
+
+
+class BuiltAssetsReporter(Reporter):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.built_assets = []
+
+    def start_artifact_build(self, is_current):
+        source_obj = self.current_artifact.source_obj
+        if isinstance(source_obj, Asset):
+            self.built_assets.append(source_obj)
+
+
+def test_build_omits_shadowed_assets(theme_builder, theme_env):
+    with BuiltAssetsReporter(theme_env) as reporter:
+        theme_builder.build_all()
+    asset_urls = [asset.url_path for asset in reporter.built_assets]
+    assert len(asset_urls) > 0
+    assert len(set(asset_urls)) == len(asset_urls)

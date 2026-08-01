@@ -16,12 +16,12 @@ export default function ChildActions({
   allChildren: RecordChild[];
   page: number;
   setPage: (n: number) => void;
-}): JSX.Element {
+}): React.JSX.Element {
   const alt = useRecordAlt();
 
   const shownChildren = allChildren.slice(
     (page - 1) * CHILDREN_PER_PAGE,
-    page * CHILDREN_PER_PAGE
+    page * CHILDREN_PER_PAGE,
   );
 
   return (

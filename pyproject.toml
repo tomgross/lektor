@@ -1,8 +1,111 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.13.0,<2.0.0", "hatch-vcs"]
+build-backend = "hatchling.build"
 
-[tool.setuptools_scm]
+[project]
+name = "Lektor"
+description = "A static content management system."
+dynamic = ["version"]
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Armin Ronacher", email = "armin.ronacher@active-4.com" },
+]
+urls.Homepage = "https://www.getlektor.com/"
+urls.Source = "https://github.com/lektor/lektor/"
+urls.Documentation = "https://www.getlektor.com/docs/"
+urls.Changelog = "https://github.com/lektor/lektor/blob/master/CHANGES.md"
+classifiers = [
+    "Framework :: Lektor",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+requires-python = ">=3.10"
+dependencies = [
+    "Babel",
+    "click>=6.0",
+    "Flask",
+    "inifile>=0.4.1",
+    "Jinja2>=3.0",
+    "MarkupSafe",
+    "marshmallow",
+    "marshmallow_dataclass>=8.5.9",
+    "mistune>=0.7.0,<3,!=2.0.*",
+    "Pillow>=6",
+    "pip",
+    "python-slugify",
+    "requests",
+    "tzdata; sys_platform == 'win32'",
+    "watchfiles>=0.12",
+    "Werkzeug>=2.1.0",
+]
+optional-dependencies.ipython = [
+    "ipython",
+    "traitlets",
+]
+
+[project.scripts]
+lektor = "lektor.cli:main"
+
+[dependency-groups]
+dev = [                         # generally useful during development
+    {include-group = "pytest"},
+    {include-group = "prek"},
+]
+pytest = [                 # requirements for running our pytest tests
+    "pytest>=6",
+    "pytest-click",
+    "pytest-mock",
+    "coverage[toml]",
+    "iniconfig",
+    "hatchling",
+]
+pylint = [                      # requirements for running pylint
+    "pylint==4.0.4",
+    "pytest>=6",
+    "pytest-mock",
+    "iniconfig",
+]
+prek = ["prek"]                 # Running pre-commit hooks with prek.
+mistune0 = ["mistune<2"]        # pin old mistune for testing
+tzdata = ["tzdata"]             # test with tzdata rather than system zone data
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build]
+include = [
+    "/lektor",
+]
+artifacts = [
+    "/lektor/admin/static",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/lektor",
+    "/build_frontend.py",
+    "/CHANGES.md",
+    "/tests",
+    "/tox.ini",
+]
+
+[tool.hatch.build.hooks.custom]
+path = "build_frontend.py"
+
+
 
 ################################################################
 #
@@ -13,6 +116,7 @@ norecursedirs = ["venv", ".tox", ".git", "node_modules"]
 addopts = "--strict-markers"
 markers = [
     "requiresinternet: marks tests requiring an internet connection",
+    "slowtest: marks particularly slow tests that do not need to be run for every testenv variant",
 ]
 
 
@@ -20,31 +124,102 @@ markers = [
 #
 # coverage
 #
+[tool.coverage.run]
+source_pkgs = [
+    "lektor",
+]
+omit = [
+    # test_pluginsystem.py has a test that installs a Lektor plugin from PyPI
+    # into a pytest temporary directory
+    "*/pytest-*/*",
+]
+parallel = true
+
 [tool.coverage.paths]
 paths = [
     "lektor",
-    ".tox/py*/*/lektor",
+    ".tox/*/site-packages/lektor",
+    # Attempt to match source files on various GitHub Windows/macOS runners
+    '*:*\lektor\lektor\lektor',
+    '*/lektor/lektor/lektor',
+    "*/.tox/*/site-packages/lektor",
 ]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    '^\s*\.\.\.\s*$',
+    '^\s*raise\s+NotImplementedError\(\)\s*$',
+    '^if TYPE_CHECKING:\s*',
+]
+
+################################################################
+#
+# ruff
+#
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",
+    "I",                        # isort
+    "UP",                       # pyupgrade
+    "YTT",                      # flake8-2020
+    "ASYNC",                    # flake8-async
+    "B",                        # flake8-bugbear
+    "C4",                       # flake8-comprehensions
+    "T10",                      # flake8-debugger
+    "EXE",                      # flake8-executable
+    "ISC",                      # flake8-implicit-string-concat
+    "LOG",                      # flake8-logging
+    "G",                        # flake8-logging-format
+    "Q",                        # flake8-quotes
+    "INT",                      # flake8-gettext
+    "PL",                       # pylint
+    "FLY",                      # flynt
+    "FURB",                     # refurb
+    "PERF",                     # perflint
+]
+ignore = [
+    "PLC0415",                  # pylint import-outside-toplevel
+    "PLW2901",                  # pylint redefined-loop-name
+    "PLR0913",                  # pylint too-many-arguments
+    "PLR2004",                  # pylint magic-value-comparison
+    "PLR2044",                  # pylint empty-comment
+    "PLR5501",                  # pylint collapsible-else-if
+]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+lines-after-imports = 2
+order-by-type = false
+extra-standard-library = [ "_typeshed" ]
+known-first-party = ["lektor"]
+
+[tool.ruff.lint.pylint]
+max-branches = 20
+max-returns = 8
 
 ################################################################
 #
 # pylint
 #
-[tool.pylint.MASTER]
+[tool.pylint.main]
 ignore = [".git"]
+load-plugins = "pylint.extensions.no_self_use"
 
-[tool.pylint.FORMAT]
+[tool.pylint.format]
 max-line-length = 91
 max-module-lines = 2000
 
-[tool.pylint.DESIGN]
+[tool.pylint.design]
 max-attributes = 20
+max-positional-arguments = 7   # default is 5
 max-locals = 30
 max-branches = 20
 max-nested-blocks = 8
 max-returns = 8
 
-[tool.pylint.'MESSAGES CONTROL']
+
+[tool.pylint."messages control"]
 disable = [
     "redundant-u-string-prefix",
     "consider-using-f-string",
@@ -60,4 +235,64 @@ disable = [
     "too-few-public-methods",
     "too-many-public-methods",
     "duplicate-code",
+    "unnecessary-dunder-call",
 ]
+
+################################################################
+#
+# mypy
+#
+[tool.mypy]
+files = ["$MYPY_CONFIG_FILE_DIR/lektor"]
+
+plugins = [
+    "marshmallow_dataclass.mypy",
+]
+
+show_error_codes = true
+error_summary = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+strict = true
+#implicit_reexport = true
+
+# We have just started to add annotation.  For now, ignore all errors
+# by default. (This can be disabled on a per-package or per-module
+# basis in the overrides.)
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Packages and modules we want to check
+module = [
+    "lektor.assets",
+    "lektor.constants",
+    "lektor.devserver",
+    "lektor.packages",
+    "lektor.admin.*",
+    "lektor.imagetools.*",
+    "test_packages",
+]
+ignore_errors = false
+
+[[tool.mypy.overrides]]
+module = [
+    "lektor.packages",
+]
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = [
+    "lektor.admin.*",
+    "lektor.devserver",
+    "lektor.imagetools.*",
+    "lektor.packages",
+]
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = [
+    "lektor.admin.*",
+]
+warn_return_any = false

@@ -1,7 +1,10 @@
 # pylint: disable=import-outside-toplevel
+from __future__ import annotations
+
 import json
 import os
-import warnings
+from pathlib import Path
+from typing import Any
 
 import click
 
@@ -18,7 +21,7 @@ def pruneflag(cli):
     return click.option(
         "--prune/--no-prune",
         default=True,
-        help="Controls if old " 'artifacts should be pruned.  "prune" is the default.',
+        help="Whether outdated artifacts are pruned. The default is to prune.",
     )(cli)
 
 
@@ -34,27 +37,7 @@ def extraflag(cli):
     )(cli)
 
 
-def _buildflag_deprecated(ctx, param, value):
-    if value:
-        warnings.warn(
-            "use --extra-flag instead of --build-flag",
-            DeprecationWarning,
-        )
-    return value
-
-
-def buildflag(cli):
-    return click.option(
-        "--build-flag",
-        "build_flags",
-        multiple=True,
-        help="Deprecated. Use --extra-flag instead.",
-        callback=_buildflag_deprecated,
-    )(cli)
-
-
 class AliasedGroup(click.Group):
-
     # pylint: disable=inconsistent-return-statements
     def get_command(self, ctx, cmd_name):
         rv = click.Group.get_command(self, ctx, cmd_name)
@@ -65,7 +48,7 @@ class AliasedGroup(click.Group):
             return None
         if len(matches) == 1:
             return click.Group.get_command(self, ctx, matches[0])
-        ctx.fail("Too many matches: %s" % ", ".join(sorted(matches)))
+        ctx.fail(f"Too many matches: {', '.join(sorted(matches))}")
 
 
 class Context:
@@ -103,12 +86,13 @@ class Context:
                 return None
             if self._project_path is None:
                 raise click.UsageError(
-                    "Could not automatically discover "
-                    "project.  A Lektor project must "
-                    "exist in the working directory or "
-                    "any of the parent directories."
+                    "Could not automatically discover a "
+                    "project in the working or ancestor directories. "
+                    "The --project global parameter or the "
+                    "LEKTOR_PROJECT environment variable may be used "
+                    "to explicitly specify the path to the project."
                 )
-            raise click.UsageError('Could not find project "%s"' % self._project_path)
+            raise click.UsageError(f'Could not find project "{self._project_path}"')
         self._project = rv
         return rv
 
@@ -145,5 +129,28 @@ pass_context = click.make_pass_decorator(Context, ensure=True)
 
 def validate_language(ctx, param, value):
     if value is not None and not is_valid_language(value):
-        raise click.BadParameter('Unsupported language "%s".' % value)
+        raise click.BadParameter(f'Unsupported language "{value}".')
     return value
+
+
+class ResolvedPath(click.Path):
+    """A click paramter type for a resolved path.
+
+    We could just use ``click.Path(resolve_path=True)`` except that that
+    fails sometimes under Windows running python <= 3.9.
+
+    See https://github.com/pallets/click/issues/2466
+    """
+
+    def __init__(self, writable=False, file_okay=True):
+        super().__init__(
+            resolve_path=True, allow_dash=False, writable=writable, file_okay=file_okay
+        )
+
+    def convert(
+        self, value: Any, param: click.Parameter | None, ctx: click.Context | None
+    ) -> Any:
+        abspath = Path(value).absolute()
+        # fsdecode to ensure that the return value is a str.
+        # (with click<8.0.3 Path.convert will return Path if passed a Path)
+        return os.fsdecode(super().convert(abspath, param, ctx))

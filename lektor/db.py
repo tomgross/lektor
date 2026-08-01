@@ -1,26 +1,30 @@
-# -*- coding: utf-8 -*-
 # pylint: disable=too-many-lines
+from __future__ import annotations
+
 import errno
 import functools
 import hashlib
 import operator
 import os
 import posixpath
-import warnings
 from collections import OrderedDict
 from datetime import timedelta
+from functools import total_ordering
+from itertools import chain
 from itertools import islice
 from operator import methodcaller
+from pathlib import Path
+from typing import TYPE_CHECKING
+from urllib.parse import urljoin
 
 from jinja2 import is_undefined
 from jinja2 import Undefined
 from jinja2.exceptions import UndefinedError
 from jinja2.utils import LRUCache
-from werkzeug.urls import url_join
 from werkzeug.utils import cached_property
 
 from lektor import metaformat
-from lektor.assets import Directory
+from lektor.assets import get_asset_root
 from lektor.constants import PRIMARY_ALT
 from lektor.context import Context
 from lektor.context import get_ctx
@@ -33,9 +37,11 @@ from lektor.imagetools import get_image_info
 from lektor.imagetools import make_image_thumbnail
 from lektor.imagetools import read_exif
 from lektor.imagetools import ThumbnailMode
-from lektor.sourceobj import SourceObject
+from lektor.sourceobj import DBSourceObject
 from lektor.sourceobj import VirtualSourceObject
 from lektor.utils import cleanup_path
+from lektor.utils import cleanup_url_path
+from lektor.utils import deprecated
 from lektor.utils import fs_enc
 from lektor.utils import locate_executable
 from lektor.utils import make_relative_url
@@ -44,6 +50,11 @@ from lektor.utils import split_virtual_path
 from lektor.utils import untrusted_to_os_path
 from lektor.videotools import get_video_info
 from lektor.videotools import make_video_thumbnail
+
+
+if TYPE_CHECKING:
+    from lektor.environment import Environment
+    from lektor.environment.config import Config
 
 # pylint: disable=no-member
 
@@ -82,16 +93,17 @@ def _require_ctx(record):
     ctx = get_ctx()
     if ctx is None:
         raise RuntimeError(
-            "This operation requires a context but none was " "on the stack."
+            "This operation requires a context but none was on the stack."
         )
     if ctx.pad is not record.pad:
         raise RuntimeError(
-            "The context on the stack does not match the " "pad of the record."
+            "The context on the stack does not match the pad of the record."
         )
     return ctx
 
 
-class _CmpHelper:
+@total_ordering
+class _CmpHelper:  # noqa: PLW1641
     def __init__(self, value, reverse):
         self.value = value
         self.reverse = reverse
@@ -124,9 +136,6 @@ class _CmpHelper:
         a, b = self.coerce(self.value, other.value)
         return a == b
 
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
     def __lt__(self, other):
         a, b = self.coerce(self.value, other.value)
         try:
@@ -138,15 +147,6 @@ class _CmpHelper:
             if self.reverse:
                 return a is not None
             return a is None
-
-    def __gt__(self, other):
-        return not (self.__lt__(other) or self.__eq__(other))
-
-    def __le__(self, other):
-        return self.__lt__(other) or self.__eq__(other)
-
-    def __ge__(self, other):
-        return not self.__lt__(other)
 
 
 def _auto_wrap_expr(value):
@@ -162,7 +162,7 @@ def save_eval(filter, record):
         return Undefined(e.message)
 
 
-class Expression:
+class Expression:  # noqa: PLW1641
     def __eval__(self, record):
         # pylint: disable=no-self-use
         return record
@@ -312,18 +312,16 @@ class _RecordQueryProxy:
 F = _RecordQueryProxy()
 
 
-class Record(SourceObject):
+class Record(DBSourceObject):
     source_classification = "record"
     supports_pagination = False
 
     def __init__(self, pad, data, page_num=None):
-        SourceObject.__init__(self, pad)
+        super().__init__(pad)
         self._data = data
         self._bound_data = {}
         if page_num is not None and not self.supports_pagination:
-            raise RuntimeError(
-                "%s does not support pagination" % self.__class__.__name__
-            )
+            raise RuntimeError(f"{self.__class__.__name__} does not support pagination")
         self.page_num = page_num
 
     @property
@@ -342,31 +340,32 @@ class Record(SourceObject):
     @property
     def alt(self):
         """Returns the alt of this source object."""
-        return self["_alt"]
+        return self._data["_alt"]
 
     @property
-    def is_hidden(self):
-        """Indicates if a record is hidden.  A record is considered hidden
-        if the record itself is hidden or the parent is.
+    def is_hidden(self) -> bool:
+        """Indicates whether a record is hidden.
+
+        Artifacts are not built for hidden objects.  Also, by default, hidden records
+        are not included in `Query` results.
         """
-        if not is_undefined(self._data["_hidden"]):
-            return self._data["_hidden"]
-        return self._is_considered_hidden()
+        hidden = self._data["_hidden"]
+        if not is_undefined(hidden):
+            return hidden
+        return self._is_hidden_by_parent_config()
 
-    def _is_considered_hidden(self):
-        parent = self.parent
-        if parent is None:
-            return False
+    def _is_hidden_by_parent_config(self) -> bool:
+        # Records may be implicitly hidden by their parents' configuration.  The details
+        # depend on record type.
 
-        hidden_children = parent.datamodel.child_config.hidden
-        if hidden_children is not None:
-            return hidden_children
-        return parent.is_hidden
+        # The Page and Attachment subclasses provide concrete implementations for this
+        # method.
+        raise NotImplementedError
 
     @property
-    def is_discoverable(self):
-        """Indicates if the page is discoverable without knowing the URL."""
-        return self._data["_discoverable"] and not self.is_hidden
+    def is_discoverable(self) -> bool:
+        """Indicates whether the page is discoverable without knowing the URL."""
+        return self._data["_discoverable"]
 
     @cached_property
     def pagination(self):
@@ -376,6 +375,7 @@ class Record(SourceObject):
         return self.datamodel.pagination_config.get_pagination_controller(self)
 
     @cached_property
+    @deprecated(version="3.4.0", stacklevel=2)
     def contents(self):
         return FileContents(self.source_filename)
 
@@ -386,7 +386,7 @@ class Record(SourceObject):
 
     def get_record_label_i18n(self):
         rv = {}
-        for lang, _ in (self.datamodel.label_i18n or {}).items():
+        for lang in self.datamodel.label_i18n or {}:
             label = self.datamodel.format_record_label(self, lang)
             if not label:
                 label = self.get_fallback_record_label(lang)
@@ -446,7 +446,7 @@ class Record(SourceObject):
 
     @property
     def path(self):
-        return self["_path"]
+        return self._data["_path"]
 
     def get_sort_key(self, fields):
         """Returns a sort key for the given field specifications specific
@@ -480,27 +480,16 @@ class Record(SourceObject):
         self._bound_data[name] = rv
         return rv
 
-    def __eq__(self, other):
-        if self is other:
-            return True
-        if self.__class__ != other.__class__:
-            return False
-        return self["_path"] == other["_path"]
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def __hash__(self):
-        return hash(self.path)
-
     def __repr__(self):
-        return "<%s model=%r path=%r%s%s>" % (
-            self.__class__.__name__,
-            self["_model"],
-            self["_path"],
-            self.alt != PRIMARY_ALT and " alt=%r" % self.alt or "",
-            self.page_num is not None and " page_num=%r" % self.page_num or "",
-        )
+        bits = [
+            f"model={self._data['_model']!r}",
+            f"path={self._data['_path']!r}",
+        ]
+        if self.alt != PRIMARY_ALT:
+            bits.append(f"alt={self.alt!r}")
+        if self.page_num is not None:
+            bits.append(f"page_num={self.page_num!r}")
+        return f"<{self.__class__.__name__} {' '.join(bits)}>"
 
 
 class Siblings(VirtualSourceObject):  # pylint: disable=abstract-method
@@ -556,9 +545,9 @@ class Page(Record):
 
     @cached_property
     def path(self):
-        rv = self["_path"]
+        rv = self._data["_path"]
         if self.page_num is not None:
-            rv = "%s@%s" % (rv, self.page_num)
+            rv = f"{rv}@{self.page_num}"
         return rv
 
     @cached_property
@@ -566,21 +555,16 @@ class Page(Record):
         if self.page_num is None:
             return self
         return self.pad.get(
-            self["_path"], persist=self.pad.cache.is_persistent(self), alt=self.alt
+            self._data["_path"],
+            persist=self.pad.cache.is_persistent(self),
+            alt=self.alt,
         )
 
-    @property
-    def source_filename(self):
-        if self.alt != PRIMARY_ALT:
-            return os.path.join(
-                self.pad.db.to_fs_path(self["_path"]), "contents+%s.lr" % self.alt
-            )
-        return os.path.join(self.pad.db.to_fs_path(self["_path"]), "contents.lr")
-
     def iter_source_filenames(self):
-        yield self.source_filename
+        fs_path = self.pad.db.to_fs_path(self._data["_path"])
         if self.alt != PRIMARY_ALT:
-            yield os.path.join(self.pad.db.to_fs_path(self["_path"]), "contents.lr")
+            yield os.path.join(fs_path, f"contents+{self.alt}.lr")
+        yield os.path.join(fs_path, "contents.lr")
 
     @property
     def url_path(self):
@@ -599,6 +583,17 @@ class Page(Record):
         if self.page_num in (1, None):
             return path.rstrip("/") + "/"
         return f"{path.rstrip('/')}/{pg.url_suffix.strip('/')}/{self.page_num:d}/"
+
+    @property
+    def url_content_path(self):
+        """URL path to the directory that contains children of this record."""
+        url_path = self.url_path
+        if url_path.endswith("/"):
+            return url_path
+        # See https://www.getlektor.com/docs/content/urls/#content-below-dotted-slugs
+        head, sep, tail = url_path.rpartition("/")
+        assert "." in tail
+        return f"{head}{sep}_{tail}/"
 
     def resolve_url_path(self, url_path):
         pg = self.datamodel.pagination_config
@@ -620,7 +615,11 @@ class Page(Record):
         # When we resolve URLs we also want to be able to explicitly
         # target undiscoverable pages.  Those who know the URL are
         # rewarded.
-        q = self.children.include_undiscoverable(True)
+
+        # We also want to resolve hidden children
+        # here. Pad.resolve_url_path() is where the check for hidden
+        # records is done.
+        q = self.children.include_undiscoverable(True).include_hidden(True)
 
         for idx in range(len(url_path)):
             piece = "/".join(url_path[: idx + 1])
@@ -640,6 +639,17 @@ class Page(Record):
             rv = node.resolve_url_path(url_path[idx + 1 :])
             if rv is not None:
                 return rv
+
+        if len(url_path) == 1 and url_path[0] == "index.html":
+            if pg.enabled or "." not in self["_slug"]:
+                # This page renders to an index.html.  Its .url_path method returns
+                # a path ending with '/'.  Accept explicit "/index.html" when resolving.
+                #
+                # FIXME: the code for Record (and subclass) .url_path and .resolve_url
+                # could use some cleanup, especially where it deals with
+                # slugs that contain '.'s.
+                return self
+
         return None
 
     @cached_property
@@ -653,6 +663,19 @@ class Page(Record):
             )
         return None
 
+    def _is_hidden_by_parent_config(self) -> bool:
+        # For Pages, If an explicit value for the _hidden field is not set, the value of
+        # the hidden option in the child configuration section of the parent's datamodel
+        # is checked. If that, too, is not set, then pages inherit the hidden status of
+        # their parent.
+        parent = self.parent
+        if parent is None:
+            return False
+        hidden_children = parent.datamodel.child_config.hidden
+        if hidden_children is not None:
+            return hidden_children
+        return parent.is_hidden
+
     @property
     def children(self):
         """A query over all children that are not hidden or undiscoverable.
@@ -661,12 +684,12 @@ class Page(Record):
         repl_query = self.datamodel.get_child_replacements(self)
         if repl_query is not None:
             return repl_query.include_undiscoverable(False)
-        return Query(path=self["_path"], pad=self.pad, alt=self.alt)
+        return Query(path=self._data["_path"], pad=self.pad, alt=self.alt)
 
     @property
     def attachments(self):
         """Returns a query for the attachments of this record."""
-        return AttachmentsQuery(path=self["_path"], pad=self.pad, alt=self.alt)
+        return AttachmentsQuery(path=self._data["_path"], pad=self.pad, alt=self.alt)
 
     def has_prev(self):
         return self.get_siblings().prev_page is not None
@@ -719,18 +742,12 @@ class Attachment(Record):
 
     is_attachment = True
 
-    @property
-    def source_filename(self):
-        if self.alt != PRIMARY_ALT:
-            suffix = "+%s.lr" % self.alt
-        else:
-            suffix = ".lr"
-        return self.pad.db.to_fs_path(self["_path"]) + suffix
-
-    def _is_considered_hidden(self):
+    def _is_hidden_by_parent_config(self) -> bool:
         # Attachments are only considered hidden if they have been
-        # configured as such.  This means that even if a record itself is
-        # hidden, the attachments by default will not.
+        # configured as such. If an explicit value for the _hidden field is not set,
+        # the value of the hidden option in the attachment configuration section of the
+        # parent's datamodel is checked. If that, too, is not set, attachments will be
+        # visible, even if their parent is hidden.
         parent = self.parent
         if parent is None:
             return False
@@ -742,7 +759,7 @@ class Attachment(Record):
 
     @property
     def attachment_filename(self):
-        return self.pad.db.to_fs_path(self["_path"])
+        return self.pad.db.to_fs_path(self._data["_path"])
 
     @property
     def parent(self):
@@ -752,6 +769,7 @@ class Attachment(Record):
         )
 
     @cached_property
+    @deprecated(version="3.4.0", stacklevel=2)
     def contents(self):
         return FileContents(self.attachment_filename)
 
@@ -759,8 +777,11 @@ class Attachment(Record):
         return self["_id"]
 
     def iter_source_filenames(self):
-        yield self.source_filename
-        yield self.attachment_filename
+        attachment_filename = self.attachment_filename
+        if self.alt != PRIMARY_ALT:
+            yield f"{attachment_filename}+{self.alt}.lr"
+        yield f"{attachment_filename}.lr"
+        yield attachment_filename
 
     @property
     def url_path(self):
@@ -772,29 +793,19 @@ class Attachment(Record):
 class Image(Attachment):
     """Specific class for image attachments."""
 
-    def __init__(self, pad, data, page_num=None):
-        Attachment.__init__(self, pad, data, page_num)
-        self._image_info = None
-        self._exif_cache = None
+    @cached_property
+    def _image_info(self):
+        return get_image_info(self.attachment_filename)
 
-    def _get_image_info(self):
-        if self._image_info is None:
-            with open(self.attachment_filename, "rb") as f:
-                self._image_info = get_image_info(f)
-        return self._image_info
-
-    @property
+    @cached_property
     def exif(self):
         """Provides access to the exif data."""
-        if self._exif_cache is None:
-            with open(self.attachment_filename, "rb") as f:
-                self._exif_cache = read_exif(f)
-        return self._exif_cache
+        return read_exif(self.attachment_filename)
 
     @property
     def width(self):
         """The width of the image if possible to determine."""
-        rv = self._get_image_info()[1]
+        rv = self._image_info[1]
         if rv is not None:
             return rv
         return Undefined("Width of image could not be determined.")
@@ -802,7 +813,7 @@ class Image(Attachment):
     @property
     def height(self):
         """The height of the image if possible to determine."""
-        rv = self._get_image_info()[2]
+        rv = self._image_info[2]
         if rv is not None:
             return rv
         return Undefined("Height of image could not be determined.")
@@ -810,25 +821,13 @@ class Image(Attachment):
     @property
     def format(self):
         """Returns the format of the image."""
-        rv = self._get_image_info()[0]
+        rv = self._image_info[0]
         if rv is not None:
             return rv
         return Undefined("The format of the image could not be determined.")
 
-    def thumbnail(
-        self, width=None, height=None, crop=None, mode=None, upscale=None, quality=None
-    ):
+    def thumbnail(self, width=None, height=None, mode=None, upscale=None, quality=None):
         """Utility to create thumbnails."""
-
-        # `crop` exists to preserve backward-compatibility, and will be removed.
-        if crop is not None and mode is not None:
-            raise ValueError("Arguments `crop` and `mode` are mutually exclusive.")
-
-        if crop is not None:
-            warnings.warn(
-                'The `crop` argument is deprecated. Use `mode="crop"` instead.'
-            )
-            mode = "crop"
 
         if mode is None:
             mode = ThumbnailMode.DEFAULT
@@ -862,7 +861,7 @@ def require_ffmpeg(f):
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         return Undefined(
-            "Unable to locate ffmpeg or ffprobe executable. Is " "it installed?"
+            "Unable to locate ffmpeg or ffprobe executable. Is it installed?"
         )
 
     return wrapper
@@ -871,55 +870,49 @@ def require_ffmpeg(f):
 class Video(Attachment):
     """Specific class for video attachments."""
 
-    def __init__(self, pad, data, page_num=None):
-        Attachment.__init__(self, pad, data, page_num)
-        self._video_info = None
-
-    def _get_video_info(self):
-        if self._video_info is None:
-            try:
-                self._video_info = get_video_info(self.attachment_filename)
-            except RuntimeError:
-                # A falsy value ensures we don't retry this video again
-                self._video_info = False
-        return self._video_info
+    @cached_property
+    def _video_info(self):
+        try:
+            return get_video_info(self.attachment_filename)
+        except RuntimeError:
+            return {}
 
     @property
     @require_ffmpeg
     def width(self):
         """Returns the width of the video if possible to determine."""
-        rv = self._get_video_info()
-        if rv:
-            return rv["width"]
-        return Undefined("The width of the video could not be determined.")
+        try:
+            return self._video_info["width"]
+        except KeyError:
+            return Undefined("The width of the video could not be determined.")
 
     @property
     @require_ffmpeg
     def height(self):
         """Returns the height of the video if possible to determine."""
-        rv = self._get_video_info()
-        if rv:
-            return rv["height"]
-        return Undefined("The height of the video could not be determined.")
+        try:
+            return self._video_info["height"]
+        except KeyError:
+            return Undefined("The height of the video could not be determined.")
 
     @property
     @require_ffmpeg
     def duration(self):
         """Returns the duration of the video if possible to determine."""
-        rv = self._get_video_info()
-        if rv:
-            return rv["duration"]
-        return Undefined("The duration of the video could not be determined.")
+        try:
+            return self._video_info["duration"]
+        except KeyError:
+            return Undefined("The duration of the video could not be determined.")
 
     @require_ffmpeg
     def frame(self, seek=None):
         """Returns a VideoFrame object that is thumbnailable like an Image."""
-        rv = self._get_video_info()
-        if not rv:
+        duration = self.duration
+        if is_undefined(duration):
             return Undefined("Unable to get video properties.")
 
         if seek is None:
-            seek = rv["duration"] / 2
+            seek = duration / 2
         return VideoFrame(self, seek)
 
 
@@ -995,7 +988,7 @@ class Query:
         self._pristine = True
         self._limit = None
         self._offset = None
-        self._include_hidden = None
+        self._include_hidden = False
         self._include_undiscoverable = False
         self._page_num = None
         self._filter_func = None
@@ -1018,15 +1011,13 @@ class Query:
         if page_num is Ellipsis:
             page_num = self._page_num
         return self.pad.get(
-            "%s/%s" % (self.path, id), persist=persist, alt=self.alt, page_num=page_num
+            f"{self.path}/{id}", persist=persist, alt=self.alt, page_num=page_num
         )
 
     def _matches(self, record):
-        include_hidden = self._include_hidden
-        if include_hidden is not None:
-            if not self._include_hidden and record.is_hidden:
-                return False
-        if not self._include_undiscoverable and record.is_undiscoverable:
+        if not self._include_hidden and record.is_hidden:
+            return False
+        if not self._include_undiscoverable and not record.is_discoverable:
             return False
         for filter in self._filters or ():
             if not save_eval(filter, record):
@@ -1087,24 +1078,18 @@ class Query:
         return None
 
     def include_hidden(self, value):
-        """Controls if hidden records should be included which will not
-        happen by default for queries to children.
+        """Controls whether hidden records should be included.
+
+        By default, they are not.
         """
         rv = self._clone(mark_dirty=True)
         rv._include_hidden = value
         return rv
 
     def include_undiscoverable(self, value):
-        """Controls if undiscoverable records should be included as well."""
+        """Controls whether undiscoverable records should be included as well."""
         rv = self._clone(mark_dirty=True)
         rv._include_undiscoverable = value
-
-        # If we flip from not including undiscoverables to discoverables
-        # but we did not yet decide on the value of _include_hidden it
-        # becomes False to not include it.
-        if rv._include_hidden is None and value:
-            rv._include_hidden = False
-
         return rv
 
     def request_page(self, page_num):
@@ -1191,15 +1176,11 @@ class Query:
                 (self._offset or 0) + self._limit if self._limit else None,
             )
 
-        for item in iterable:
-            yield item
+        yield from iterable
 
     def __repr__(self):
-        return "<%s %r%s>" % (
-            self.__class__.__name__,
-            self.path,
-            self.alt and " alt=%r" % self.alt or "",
-        )
+        alt_ = f" alt={self.alt!r}" if self.alt else ""
+        return f"<{self.__class__.__name__} {self.path!r}{alt_}>"
 
 
 class EmptyQuery(Query):
@@ -1254,17 +1235,17 @@ def _iter_filename_choices(fn_base, alts, config, fallback=True):
     # implicitly say the record exists.
     for alt in alts:
         if alt != PRIMARY_ALT and config.is_valid_alternative(alt):
-            yield os.path.join(fn_base, "contents+%s.lr" % alt), alt, False
+            yield os.path.join(fn_base, f"contents+{alt}.lr"), alt, False
 
     if fallback or PRIMARY_ALT in alts:
         yield os.path.join(fn_base, "contents.lr"), PRIMARY_ALT, False
 
     for alt in alts:
         if alt != PRIMARY_ALT and config.is_valid_alternative(alt):
-            yield fn_base + "+%s.lr" % alt, alt, True
+            yield f"{fn_base}+{alt}.lr", alt, True
 
     if fallback or PRIMARY_ALT in alts:
-        yield fn_base + ".lr", PRIMARY_ALT, True
+        yield f"{fn_base}.lr", PRIMARY_ALT, True
 
 
 def _iter_content_files(dir_path, alts):
@@ -1275,7 +1256,7 @@ def _iter_content_files(dir_path, alts):
     for alt in alts:
         if alt == PRIMARY_ALT:
             continue
-        if os.path.isfile(os.path.join(dir_path, "contents+%s.lr" % alt)):
+        if os.path.isfile(os.path.join(dir_path, f"contents+{alt}.lr")):
             yield alt
     if os.path.isfile(os.path.join(dir_path, "contents.lr")):
         yield PRIMARY_ALT
@@ -1431,7 +1412,7 @@ class Database:
                             # fallback here.
                             if single_alt:
                                 break
-            except IOError as e:
+            except OSError as e:
                 if e.errno != errno.ENOENT:
                     raise
                 continue
@@ -1477,12 +1458,11 @@ class Database:
         """Looks up a datamodel based on the information about the parent
         of a model.
         """
-        dm_name = datamodel
+        model = datamodel
 
         # Only look for a datamodel if there was not defined.
-        if dm_name is None:
+        if model is None:
             parent = posixpath.dirname(path)
-            dm_name = None
 
             # If we hit the root, and there is no model defined we need
             # to make sure we do not recurse onto ourselves.
@@ -1492,18 +1472,18 @@ class Database:
                 parent_obj = pad.get(parent)
                 if parent_obj is not None:
                     if is_attachment:
-                        dm_name = parent_obj.datamodel.attachment_config.model
+                        model = parent_obj.datamodel.attachment_config.model
                     else:
-                        dm_name = parent_obj.datamodel.child_config.model
+                        model = parent_obj.datamodel.child_config.model
 
-        for dm_name in _iter_datamodel_choices(dm_name, path, is_attachment):
+        for dm_name in _iter_datamodel_choices(model, path, is_attachment):
             # If that datamodel exists, let's roll with it.
             datamodel = self.datamodels.get(dm_name)
             if datamodel is not None:
                 return datamodel
 
         raise AssertionError(
-            "Did not find an appropriate datamodel.  " "That should never happen."
+            "Did not find an appropriate datamodel. That should never happen."
         )
 
     def get_attachment_type(self, path):
@@ -1514,9 +1494,15 @@ class Database:
         ctx = get_ctx()
         if ctx is not None:
             for filename in record.iter_source_filenames():
-                ctx.record_dependency(filename)
-            for virtual_source in record.iter_virtual_sources():
-                ctx.record_virtual_dependency(virtual_source)
+                if isinstance(record, Attachment):
+                    # For Attachments, the actually attachment data
+                    # does not affect the URL of the attachment.
+                    affects_url = filename != record.attachment_filename
+                else:
+                    affects_url = True
+                ctx.record_dependency(filename, affects_url=affects_url)
+            if isinstance(record, VirtualSourceObject):
+                ctx.record_virtual_dependency(record)
             if getattr(record, "datamodel", None) and record.datamodel.filename:
                 ctx.record_dependency(record.datamodel.filename)
                 for dep_model in self.iter_dependent_models(record.datamodel):
@@ -1586,21 +1572,22 @@ def _split_alt_from_url(config, clean_path):
 
 
 class Pad:
-    def __init__(self, db):
+    def __init__(self, db: Database):
         self.db = db
         self.cache = RecordCache(db.config["EPHEMERAL_RECORD_CACHE_SIZE"])
         self.databags = Databags(db.env)
 
     @property
-    def config(self):
+    def config(self) -> Config:
         """The config for this pad."""
         return self.db.config
 
     @property
-    def env(self):
+    def env(self) -> Environment:
         """The env for this pad."""
         return self.db.env
 
+    @deprecated("use Pad.make_url instead", version="3.4.0")
     def make_absolute_url(self, url):
         """Given a URL this makes it absolute if this is possible."""
         base_url = self.db.config["PROJECT"].get("url")
@@ -1609,11 +1596,18 @@ class Pad:
                 "To use absolute URLs you need to configure "
                 "the URL in the project config."
             )
-        return url_join(base_url.rstrip("/") + "/", url.lstrip("/"))
+        return urljoin(base_url.rstrip("/") + "/", url.lstrip("/"))
 
     def make_url(self, url, base_url=None, absolute=None, external=None):
         """Helper method that creates a finalized URL based on the parameters
         provided and the config.
+
+        :param url: URL path (starting with "/") relative to the
+            configured base_path.
+
+        :param base_url: Base URL path (starting with "/") relative to
+            the configured base_path.
+
         """
         url_style = self.db.config.url_style
         if absolute is None:
@@ -1627,12 +1621,12 @@ class Pad:
                     "To use absolute URLs you need to "
                     "configure the URL in the project config."
                 )
-            return url_join(external_base_url, url.lstrip("/"))
+            return urljoin(external_base_url, url.lstrip("/"))
         if absolute:
-            return url_join(self.db.config.base_path, url.lstrip("/"))
+            return urljoin(self.db.config.base_path, url.lstrip("/"))
         if base_url is None:
             raise RuntimeError(
-                "Cannot calculate a relative URL if no base " "URL has been provided."
+                "Cannot calculate a relative URL if no base URL has been provided."
             )
         return make_relative_url(base_url, url)
 
@@ -1643,7 +1637,10 @@ class Pad:
         might be an attachment.  If a record cannot be found or is unexposed
         the return value will be `None`.
         """
-        pieces = clean_path = cleanup_path(url_path).strip("/")
+        try:
+            clean_path = cleanup_url_path(url_path).strip("/")
+        except ValueError:
+            return None
 
         # Split off the alt and if no alt was found, point it to the
         # primary alternative.  If the clean path comes back as `None`
@@ -1669,11 +1666,7 @@ class Pad:
                 return rv
 
         if include_assets:
-            for asset_root in [self.asset_root] + self.theme_asset_roots:
-                rv = asset_root.resolve_url_path(pieces)
-                if rv is not None:
-                    break
-            return rv
+            return self.asset_root.resolve_url_path(pieces)
         return None
 
     def get_root(self, alt=None):
@@ -1684,36 +1677,40 @@ class Pad:
 
     root = property(get_root)
 
-    @property
+    @cached_property
     def asset_root(self):
-        """The root of the asset tree."""
-        return Directory(
-            self, name="", path=os.path.join(self.db.env.root_path, "assets")
+        """The root of the asset tree.
+
+        This root represents the logical merging of any theme asset trees with the
+        main project asset tree.
+        """
+        env = self.env
+        asset_paths = (
+            Path(root, "assets") for root in chain([env.root_path], env.theme_paths)
         )
+        return get_asset_root(self, asset_paths)
 
     @property
+    @deprecated(version="3.4.0", stacklevel=2)
     def theme_asset_roots(self):
-        """The root of the asset tree of each theme."""
-        asset_roots = []
-        for theme_path in self.db.env.theme_paths:
-            asset_roots.append(
-                Directory(self, name="", path=os.path.join(theme_path, "assets"))
-            )
-        return asset_roots
+        """The root of the asset tree of each theme.
+
+        As of Lektor 3.4.0, asset trees from any active themes are logically merged into
+        a single tree, accessible via Pad.asset_root. Accordingly, `theme_asset_roots`
+        alway returns an empty list.
+
+        """
+        return []
 
     def get_all_roots(self):
         """Returns all the roots for building."""
-        rv = []
-        for alt in self.db.config.list_alternatives():
-            rv.append(self.get_root(alt=alt))
-
+        rv = [self.get_root(alt=alt) for alt in self.db.config.list_alternatives()]
         # If we don't have any alternatives, then we go with the implied
         # root.
         if not rv and self.root:
             rv = [self.root]
 
         rv.append(self.asset_root)
-        rv.extend(self.theme_asset_roots)
         return rv
 
     def get_virtual(self, record, virtual_path):
@@ -1725,7 +1722,7 @@ class Pad:
         if pieces[0].isdigit():
             if len(pieces) == 1:
                 return self.get(
-                    record["_path"], alt=record.alt, page_num=int(pieces[0])
+                    record._data["_path"], alt=record.alt, page_num=int(pieces[0])
                 )
             return None
 
@@ -1812,15 +1809,14 @@ class Pad:
     def get_asset(self, path):
         """Loads an asset by path."""
         clean_path = cleanup_path(path).strip("/")
-        nodes = [self.asset_root] + self.theme_asset_roots
-        for node in nodes:
+
+        asset = self.asset_root
+        if clean_path:
             for piece in clean_path.split("/"):
-                node = node.get_child(piece)
-                if node is None:
-                    break
-            if node is not None:
-                return node
-        return None
+                asset = asset.get_child(piece)
+                if asset is None:
+                    return None
+        return asset
 
     def instance_from_data(self, raw_data, datamodel=None, page_num=None):
         """This creates an instance from the given raw data."""
@@ -1957,11 +1953,11 @@ class TreeItem:
         db = self.tree.pad.db
         keep_attachments = include_attachments and self.can_have_attachments
         keep_pages = include_pages and self.can_have_children
-        names = set(
+        names = {
             name
             for name, _, is_attachment in db.iter_items(self.path, alt=None)
             if (keep_attachments if is_attachment else keep_pages)
-        )
+        }
         return sorted(names, key=lambda name: name.lower())
 
     def iter_children(
@@ -2034,7 +2030,7 @@ class TreeItem:
         return self._primary_record.get_sort_key(order_by)
 
     def __repr__(self):
-        return "<TreeItem %r%s>" % (
+        return "<TreeItem {!r}{}>".format(
             self.path,
             self.is_attachment and " attachment" or "",
         )
@@ -2049,7 +2045,7 @@ class Alt:
         self.exists = record is not None and os.path.isfile(record.source_filename)
 
     def __repr__(self):
-        return "<Alt %r%s>" % (self.id, self.exists and "*" or "")
+        return "<Alt {!r}{}>".format(self.id, self.exists and "*" or "")
 
 
 class Tree:
@@ -2153,7 +2149,7 @@ class Tree:
 
 
 class RecordCache:
-    """The record cache holds records eitehr in an persistent or ephemeral
+    """The record cache holds records either in an persistent or ephemeral
     section which helps the pad not load records it already saw.
     """
 

@@ -3,8 +3,8 @@ import { trans_obj } from "../i18n";
 import { getInputClass, MultiWidgetType, WidgetProps } from "./types";
 
 export function SelectInputWidget(
-  props: WidgetProps<string, MultiWidgetType>
-): JSX.Element {
+  props: WidgetProps<string, MultiWidgetType>,
+): React.JSX.Element {
   const { type, value, placeholder, onChange, disabled } = props;
 
   const choices = type.choices?.map((item) => (
@@ -18,7 +18,9 @@ export function SelectInputWidget(
       <select
         className={getInputClass(type)}
         value={value || placeholder || ""}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+        }}
         disabled={disabled}
       >
         <option key="" value="">

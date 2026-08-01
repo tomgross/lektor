@@ -13,9 +13,9 @@ export default function AvailableModels({
   newChildInfo: NewRecordInfo;
   selected: string;
   setSelected: (s: string) => void;
-}): JSX.Element {
+}): React.JSX.Element {
   const available = Object.values(newChildInfo.available_models).sort((a, b) =>
-    a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    a.name.toLowerCase().localeCompare(b.name.toLowerCase()),
   );
 
   return (
@@ -27,7 +27,9 @@ export default function AvailableModels({
             <select
               value={selected}
               className="form-control"
-              onChange={(event) => setSelected(event.target.value)}
+              onChange={(event) => {
+                setSelected(event.target.value);
+              }}
             >
               {available.map((model) => (
                 <option value={model.id} key={model.id}>

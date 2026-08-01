@@ -1,24 +1,27 @@
-"""Unit tests for lektor.pluginsystem.
-"""
+"""Unit tests for lektor.pluginsystem."""
+
+from __future__ import annotations
+
+import inspect
+import sys
+from importlib import metadata
+from importlib.abc import Loader
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from unittest import mock
 
-import pkg_resources
 import pytest
 
 from lektor.cli import cli
 from lektor.context import Context
 from lektor.packages import add_package_to_project
+from lektor.pluginsystem import _check_dist_name
 from lektor.pluginsystem import get_plugin
-from lektor.pluginsystem import load_plugins
 from lektor.pluginsystem import Plugin
 from lektor.pluginsystem import PluginController
 
 
 class DummyPlugin(Plugin):
-    name = "Dummy Plugin"
-    description = "For testing"
-
     # DummyPlugin.calls is test-local (see fixture dummy_plugin_calls, below)
     calls = []
 
@@ -43,6 +46,13 @@ class DummyPlugin(Plugin):
         self.calls.append({"event": "legacy-event"})
         return "legacy-event return value"
 
+    def on_one_type_error(self, **kwargs):
+        """Raises TypeError only on the first call."""
+        self.calls.append({"event": "one-type-error"})
+        if len(self.calls) == 1:
+            raise TypeError("test")
+        return "one-type-error return value"
+
 
 @pytest.fixture(autouse=True)
 def dummy_plugin_calls(monkeypatch):
@@ -51,53 +61,79 @@ def dummy_plugin_calls(monkeypatch):
     return DummyPlugin.calls
 
 
-class DummyEntryPointMetadata:
-    """Implement enough of `pkg_resources.IMetadataProvider` to convince a
-    Distribution that it has an entry point.
-    """
-
-    # pylint: disable=no-self-use
-
-    def __init__(self, entry_points_txt):
-        self.entry_points_txt = entry_points_txt
-
-    def has_metadata(self, name):
-        return name == "entry_points.txt"
-
-    def get_metadata(self, name):
-        return self.entry_points_txt if name == "entry_points.txt" else ""
-
-    def get_metadata_lines(self, name):
-        return pkg_resources.yield_lines(self.get_metadata(name))
-
-
-@pytest.fixture
-def dummy_plugin_distribution_name():
-    return "lektor-dummy-plugin"
-
-
-@pytest.fixture
-def dummy_plugin_distribution(dummy_plugin_distribution_name, save_sys_path):
-    """Add a dummy plugin distribution to the current working_set."""
-    dist = pkg_resources.Distribution(
-        project_name=dummy_plugin_distribution_name,
-        metadata=DummyEntryPointMetadata(
+class DummyDistribution(metadata.Distribution):
+    _files = {
+        "top_level.txt": f"{__name__}\n",
+        "entry_points.txt": inspect.cleandoc(
             f"""
             [lektor.plugins]
             dummy-plugin = {__name__}:DummyPlugin
             """
         ),
-        version="1.23",
-        location=__file__,
+    }
+
+    # Allow overriding inherited properties with class attributes
+    metadata = None
+
+    def __init__(self, metadata):
+        self.metadata = metadata
+
+    def read_text(self, filename):
+        return self._files.get(filename)
+
+    def locate_file(self, path):  # pylint: disable=no-self-use
+        return None
+
+
+class DummyPluginLoader(Loader):
+    # pylint: disable=abstract-method
+    # pylint: disable=no-self-use
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        module.DummyPlugin = DummyPlugin
+
+
+class DummyPluginFinder(metadata.DistributionFinder):
+    def __init__(self, module: str, distribution: metadata.Distribution):
+        self.module = module
+        self.distribution = distribution
+
+    def find_spec(self, fullname, path, target=None):
+        if fullname == self.module and path is None:
+            return ModuleSpec(fullname, DummyPluginLoader())
+        return None
+
+    def find_distributions(
+        self, context: metadata.DistributionFinder.Context | None = None
+    ):
+        return [self.distribution]
+
+
+@pytest.fixture
+def dummy_plugin_distribution(save_sys_path):
+    """Add a dummy plugin distribution to the current working_set."""
+    dist = DummyDistribution(
+        {
+            "Name": "lektor-dummy-plugin",
+            "Summary": "The description.",
+            "Version": "1.23",
+        }
     )
-    pkg_resources.working_set.add(dist)
+    finder = DummyPluginFinder(__name__, dist)
+    # The save_sys_path fixture will restore meta_path at end of test
+    sys.meta_path.insert(0, finder)
     return dist
 
 
 @pytest.fixture
-def dummy_plugin(env):
+def dummy_plugin(env, dummy_plugin_distribution):
     """Instantiate and register a dummy plugin in env"""
-    env.plugin_controller.instanciate_plugin("dummy-plugin", DummyPlugin)
+    env.plugin_controller.instanciate_plugin(
+        "dummy-plugin", DummyPlugin, dummy_plugin_distribution
+    )
     return env.plugins["dummy-plugin"]
 
 
@@ -126,17 +162,17 @@ class TestPlugin:
     @pytest.fixture
     def scratch_project_data(self, scratch_project_data):
         """Add plugin config file to scratch project."""
-        scratch_project_data.join("configs", "dummy-plugin.ini").write_text(
-            "test_setting = test value\n",
-            encoding="utf-8",
-            ensure=True,
-        )
+        plugin_ini = scratch_project_data / "configs/dummy-plugin.ini"
+        plugin_ini.parent.mkdir(exist_ok=True)
+        plugin_ini.write_text("test_setting = test value\n", "utf-8")
         return scratch_project_data
 
     @pytest.fixture
-    def scratch_plugin(self, scratch_env):
+    def scratch_plugin(self, scratch_env, dummy_plugin_distribution):
         """Instantiate and register a dummy plugin with scratch_env"""
-        scratch_env.plugin_controller.instanciate_plugin("dummy-plugin", DummyPlugin)
+        scratch_env.plugin_controller.instanciate_plugin(
+            "dummy-plugin", DummyPlugin, dummy_plugin_distribution
+        )
         return scratch_env.plugins["dummy-plugin"]
 
     def test_env(self, dummy_plugin, env):
@@ -147,15 +183,34 @@ class TestPlugin:
         plugin = DummyPlugin(env, "dummy-plugin")
         del env
         with pytest.raises(RuntimeError, match=r"Environment went away"):
-            getattr(plugin, "env")
+            _ = plugin.env
+
+    def test_name(self, dummy_plugin, dummy_plugin_distribution):
+        assert dummy_plugin.name == "Dummy"
+
+    def test_description(self, dummy_plugin, dummy_plugin_distribution):
+        assert dummy_plugin.description == dummy_plugin_distribution.metadata["Summary"]
+
+    def test_description_fallback(self, env):
+        # Create a plugin with no associated distribution.
+        # (This shouldn't happen in real Lektor runs.)
+        plugin = DummyPlugin(env, "dummy")
+        assert "no description available" in plugin.description
 
     def test_version(self, dummy_plugin, dummy_plugin_distribution):
         assert dummy_plugin.version == dummy_plugin_distribution.version
+
+    def test_version_missing(self, env):
+        # Instantiate plugin without specifying distribution
+        env.plugin_controller.instanciate_plugin("dummy-plugin", DummyPlugin)
+        plugin = env.plugins["dummy-plugin"]
+        assert plugin.version is None
 
     def test_path(self, dummy_plugin):
         assert dummy_plugin.path == str(Path(__file__).parent)
 
     @pytest.mark.requiresinternet
+    @pytest.mark.slowtest
     @pytest.mark.usefixtures("save_sys_path")
     def test_path_installed_plugin_is_none(self, scratch_project):
         # XXX: this test is slow and fragile. (It won't run
@@ -166,7 +221,7 @@ class TestPlugin:
         assert plugin.path is None
 
     def test_import_name(self, dummy_plugin):
-        assert dummy_plugin.import_name == "test_pluginsystem:DummyPlugin"
+        assert dummy_plugin.import_name == f"{__name__}:DummyPlugin"
 
     def test_get_lektor_config(self, dummy_plugin):
         cfg = dummy_plugin.get_lektor_config()
@@ -213,22 +268,33 @@ class TestPlugin:
     def test_to_json(self, dummy_plugin, dummy_plugin_distribution):
         assert dummy_plugin.to_json() == {
             "id": "dummy-plugin",
-            "name": DummyPlugin.name,
-            "description": DummyPlugin.description,
+            "name": dummy_plugin.name,
+            "description": dummy_plugin.description,
             "version": dummy_plugin_distribution.version,
-            "import_name": "test_pluginsystem:DummyPlugin",
+            "import_name": f"{__name__}:DummyPlugin",
             "path": str(Path(__file__).parent),
         }
 
 
-def test_load_plugins(dummy_plugin_distribution):
-    assert load_plugins() == {"dummy-plugin": DummyPlugin}
+@pytest.mark.parametrize(
+    "dist_name, plugin_id",
+    [
+        ("Lektor-FOO", "Foo"),
+    ],
+)
+def test_check_dist_name(dist_name, plugin_id):
+    _check_dist_name(dist_name, plugin_id)
 
 
-@pytest.mark.parametrize("dummy_plugin_distribution_name", ["evil-dist-name"])
-def test_load_plugins_bad_distname(dummy_plugin_distribution):
-    with pytest.raises(RuntimeError, match=r"Disallowed distribution name"):
-        load_plugins()
+@pytest.mark.parametrize(
+    "dist_name, plugin_id",
+    [
+        ("NotLektor-FOO", "Foo"),
+    ],
+)
+def test_check_dist_name_raises(dist_name, plugin_id):
+    with pytest.raises(RuntimeError):
+        _check_dist_name(dist_name, plugin_id)
 
 
 class TestPluginController:
@@ -250,7 +316,7 @@ class TestPluginController:
         plugin_controller = PluginController(env)
         del env
         with pytest.raises(RuntimeError, match=r"Environment went away"):
-            getattr(plugin_controller, "env")
+            _ = plugin_controller.env
 
     def test_instantiate_plugin(self, plugin_controller, env):
         plugin_controller.instanciate_plugin("plugin-id", DummyPlugin)
@@ -280,6 +346,13 @@ class TestPluginController:
         with pytest.deprecated_call():
             rv = plugin_controller.emit("legacy-event")
         assert rv == {dummy_plugin.id: "legacy-event return value"}
+
+    def test_emit_is_not_confused_by_type_error(self, plugin_controller, dummy_plugin):
+        # Excercises https://github.com/lektor/lektor/issues/1085
+        with pytest.raises(TypeError):
+            plugin_controller.emit("one-type-error")
+        rv = plugin_controller.emit("one-type-error")
+        assert rv == {dummy_plugin.id: "one-type-error return value"}
 
 
 @pytest.mark.usefixtures("dummy_plugin_distribution")

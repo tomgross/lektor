@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import fnmatch
 import os
 import uuid
 from functools import update_wrapper
+from typing import TYPE_CHECKING
 
+import babel.dates
 import jinja2
-from babel import dates
 from jinja2.loaders import split_template_path
 
 from lektor.constants import PRIMARY_ALT
@@ -29,13 +32,108 @@ from lektor.utils import format_lat_long
 from lektor.utils import tojson_filter
 
 
-def _pass_locale(func):
-    def new_func(*args, **kwargs):
-        if kwargs.get("locale", None) is None:
-            kwargs["locale"] = get_locale("en_US")
-        return func(*args, **kwargs)
+if TYPE_CHECKING:
+    from typing import Literal
 
-    return update_wrapper(new_func, func)
+    from lektor.assets import Asset
+    from lektor.build_programs import BuildProgram
+    from lektor.sourceobj import SourceObject
+
+
+def _prevent_inlining(wrapped):
+    """Ensure wrapped jinja filter does not get inlined by the template compiler.
+
+    The jinja compiler normally assumes that filters are pure functions (whose
+    result depends only on their parameters) and will inline filter calls that
+    are applied to compile-time constants.
+
+    E.g.
+
+        'say {{ "foo" | upper }}'
+
+    will be compiled to
+
+        "say Foo"
+
+    Many of our filters depend on global state (e..g the Lektor build context).
+
+    Applying this decorator to them will ensure they are not inlined.
+    """
+
+    # the use of @pass_context will prevent inlining
+    @jinja2.pass_context
+    def wrapper(_jinja_ctx, *args, **kwargs):
+        return wrapped(*args, **kwargs)
+
+    return update_wrapper(wrapper, wrapped)
+
+
+def _dates_filter(name, wrapped):
+    """Wrap one of the babel.dates.format_* functions for use as a jinja filter.
+
+    This will create a jinja filter that will:
+
+    - Check for *undefined* date/time input (and, in that case, return an empty string).
+
+    - Check that the ``format`` and ``locale`` parameters, if provided, have the correct
+      types, otherwise raising ``TypeError``.
+
+    - Raise ``TypeError`` with a somewhat informative message if the wrapped formatting
+      function raises an unexpected exception.  Such an exception is most likely due to
+      being passed an unsupported date/time time.  (The Babel formatting functions
+      accept a fairly wide range of input types — and that range might potentially vary
+      between releases — so we do not explicitly check the input type before passing it
+      on to Babel.)
+
+    If `locale` is not specified, we fill it in based on the current *alt*.
+
+    """
+
+    @_prevent_inlining
+    def wrapper(arg, format="medium", **kwargs):
+        if isinstance(arg, jinja2.Undefined):
+            # This will typically return an empty string, though it depends on the
+            # specific type of undefined instance.  E.g. if arg is a DebugUndefined, it
+            # will return a more descriptive message, and if arg is a StrictUndefined,
+            # an UndefinedError will be raised.
+            return str(arg)
+
+        if not isinstance(format, str):
+            raise TypeError(
+                f"The 'format' parameter to '{name}' should be a str, not {format!r}"
+            )
+
+        locale = kwargs.get("locale")
+        if locale is None:
+            kwargs["locale"] = get_locale("en_US")
+
+        try:
+            return wrapped(arg, format, **kwargs)
+        except (TypeError, ValueError):
+            raise
+        except Exception as exc:
+            raise TypeError(
+                f"While evaluating filter '{name}', an unexpected exception was "
+                "raised. This is likely caused by an input or parameter of an "
+                "unsupported type."
+            ) from exc
+
+    return update_wrapper(wrapper, wrapped)
+
+
+@_prevent_inlining
+def _markdown_filter(
+    source: str,
+    *,
+    resolve_links: Literal["always", "never", "when-possible", None] = None,
+    **kw: str,
+) -> Markdown:
+    """A jinja filter that converts markdown text to HTML."""
+    ctx = get_ctx()
+    source_obj = ctx.source if ctx is not None else None
+    return Markdown(
+        source, source_obj, field_options={**kw, "resolve_links": resolve_links}
+    )
 
 
 # Special files that should always be ignored.
@@ -87,9 +185,11 @@ class CustomJinjaEnvironment(jinja2.Environment):
             raise
 
 
-def lookup_from_bag(*args):
+@jinja2.pass_context
+def lookup_from_bag(jinja_ctx, *args):
     pieces = ".".join(x for x in args if x)
-    return site_proxy.databags.lookup(pieces)
+    site = jinja_ctx.get("site", default=site_proxy)
+    return site.databags.lookup(pieces)
 
 
 class Environment:
@@ -123,19 +223,21 @@ class Environment:
             loader=jinja2.FileSystemLoader(template_paths),
         )
 
-        from lektor.db import F, get_alts  # pylint: disable=import-outside-toplevel
+        from lektor.db import F  # pylint: disable=import-outside-toplevel
+        from lektor.db import get_alts  # pylint: disable=import-outside-toplevel
+
+        def latlongformat(latlong, secs=True):
+            lat, lon = latlong
+            return format_lat_long(lat=lat, long=lon, secs=secs)
 
         self.jinja_env.filters.update(
             tojson=tojson_filter,
             latformat=lambda x, secs=True: format_lat_long(lat=x, secs=secs),
             longformat=lambda x, secs=True: format_lat_long(long=x, secs=secs),
-            latlongformat=lambda x, secs=True: format_lat_long(secs=secs, *x),
-            # By default filters need to be side-effect free.  This is not
-            # the case for this one, so we need to make it as a dummy
-            # context filter so that jinja2 will not inline it.
-            url=jinja2.pass_context(lambda ctx, *a, **kw: url_to(*a, **kw)),
-            asseturl=jinja2.pass_context(lambda ctx, *a, **kw: get_asset_url(*a, **kw)),
-            markdown=jinja2.pass_context(lambda ctx, *a, **kw: Markdown(*a, **kw)),
+            latlongformat=latlongformat,
+            url=_prevent_inlining(url_to),
+            asseturl=_prevent_inlining(get_asset_url),
+            markdown=_markdown_filter,
         )
         self.jinja_env.globals.update(
             F=F,
@@ -147,9 +249,9 @@ class Environment:
             get_random_id=lambda: uuid.uuid4().hex,
         )
         self.jinja_env.filters.update(
-            datetimeformat=_pass_locale(dates.format_datetime),
-            dateformat=_pass_locale(dates.format_date),
-            timeformat=_pass_locale(dates.format_time),
+            dateformat=_dates_filter("dateformat", babel.dates.format_date),
+            datetimeformat=_dates_filter("datetimeformat", babel.dates.format_datetime),
+            timeformat=_dates_filter("timeformat", babel.dates.format_time),
         )
 
         # pylint: disable=import-outside-toplevel
@@ -179,6 +281,11 @@ class Environment:
 
         self.virtualpathresolver("siblings")(siblings_resolver)
 
+    root_path: str
+    build_programs: list[tuple[type[SourceObject], type[BuildProgram]]]
+    special_file_assets: dict[str, type[Asset]]
+    special_file_suffixes: dict[str, str]
+
     @property
     def asset_path(self):
         return os.path.join(self.root_path, "assets")
@@ -202,7 +309,7 @@ class Environment:
 
         return Database(self).new_pad()
 
-    def is_uninteresting_source_name(self, filename):
+    def is_uninteresting_source_name(self, filename: str) -> bool:
         """These files are ignored when sources are built into artifacts."""
         fn = filename.lower()
         if fn in SPECIAL_ARTIFACTS:
@@ -276,10 +383,14 @@ class Environment:
 
     # -- methods for the plugin system
 
-    def add_build_program(self, cls, program):
+    def add_build_program(
+        self, cls: type[SourceObject], program: type[BuildProgram]
+    ) -> None:
         self.build_programs.append((cls, program))
 
-    def add_asset_type(self, asset_cls, build_program):
+    def add_asset_type(
+        self, asset_cls: type[Asset], build_program: type[BuildProgram]
+    ) -> None:
         self.build_programs.append((asset_cls, build_program))
         self.special_file_assets[asset_cls.source_extension] = asset_cls
         if asset_cls.artifact_extension:
@@ -288,19 +399,19 @@ class Environment:
 
     def add_publisher(self, scheme, publisher):
         if scheme in self.publishers:
-            raise RuntimeError('Scheme "%s" is already registered.' % scheme)
+            raise RuntimeError(f"Scheme {scheme!r} is already registered.")
         self.publishers[scheme] = publisher
 
     def add_type(self, type):
         name = type.name
         if name in self.types:
-            raise RuntimeError('Type "%s" is already registered.' % name)
+            raise RuntimeError(f"Type {name!r} is already registered.")
         self.types[name] = type
 
     def virtualpathresolver(self, prefix):
         def decorator(func):
             if prefix in self.virtual_sources:
-                raise RuntimeError('Prefix "%s" is already registered.' % prefix)
+                raise RuntimeError(f"Prefix {prefix!r} is already registered.")
             self.virtual_sources[prefix] = func
             return func
 

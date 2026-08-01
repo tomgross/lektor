@@ -7,16 +7,21 @@ import { LektorEvents, subscribe, unsubscribe } from "../events";
  * Listen to events and show an error dialog (potentially on top of an open
  * dialog).
  */
-export default function ErrorDialog(): JSX.Element | null {
+export default function ErrorDialog(): React.JSX.Element | null {
   const [error, setError] = useState<{ code: string } | null>(null);
 
-  const dismiss = useCallback(() => setError(null), []);
+  const dismiss = useCallback(() => {
+    setError(null);
+  }, []);
 
   useEffect(() => {
-    const handler = ({ detail }: CustomEvent<LektorEvents["lektor-error"]>) =>
+    const handler = ({ detail }: CustomEvent<LektorEvents["lektor-error"]>) => {
       setError(detail);
+    };
     subscribe("lektor-error", handler);
-    return () => unsubscribe("lektor-error", handler);
+    return () => {
+      unsubscribe("lektor-error", handler);
+    };
   }, []);
 
   if (!error) {

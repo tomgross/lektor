@@ -2,9 +2,9 @@ import copy
 import os
 import re
 from collections import OrderedDict
+from urllib.parse import urlsplit
 
 from inifile import IniFile
-from werkzeug.urls import url_parse
 from werkzeug.utils import cached_property
 
 from lektor.constants import PRIMARY_ALT
@@ -14,16 +14,10 @@ from lektor.utils import secure_url
 
 
 DEFAULT_CONFIG = {
-    "IMAGEMAGICK_EXECUTABLE": None,
     "EPHEMERAL_RECORD_CACHE_SIZE": 500,
     "ATTACHMENT_TYPES": {
         # Only enable image formats here that we can handle in imagetools.
-        # Right now this is limited to jpg, png and gif because this is
-        # the only thing we compile into imagemagick on OS X distributions
-        # as those are what browsers also support.  Thers is no point in
-        # adding others here as we do not force convert images (yet?) but
-        # only use it for thumbnailing.  However an image should be
-        # visible even without thumbnailing.
+        # Right now this is limited to jpg, png and gif.
         ".jpg": "image",
         ".jpeg": "image",
         ".png": "image",
@@ -61,16 +55,6 @@ DEFAULT_CONFIG = {
 
 
 def update_config_from_ini(config, inifile):
-    def set_simple(target, source_path):
-        rv = config.get(source_path)
-        if rv is not None:
-            config[target] = rv
-
-    set_simple(
-        target="IMAGEMAGICK_EXECUTABLE", source_path="env.imagemagick_executable"
-    )
-    set_simple(target="LESSC_EXECUTABLE", source_path="env.lessc_executable")
-
     for section_name in ("ATTACHMENT_TYPES", "PROJECT", "PACKAGES", "THEME_SETTINGS"):
         section_config = inifile.section_as_dict(section_name.lower())
         config[section_name].update(section_config)
@@ -82,11 +66,11 @@ def update_config_from_ini(config, inifile):
         elif sect.startswith("alternatives."):
             alt = sect.split(".")[1]
             config["ALTERNATIVES"][alt] = {
-                "name": get_i18n_block(inifile, "alternatives.%s.name" % alt),
-                "url_prefix": inifile.get("alternatives.%s.url_prefix" % alt),
-                "url_suffix": inifile.get("alternatives.%s.url_suffix" % alt),
-                "primary": inifile.get_bool("alternatives.%s.primary" % alt),
-                "locale": inifile.get("alternatives.%s.locale" % alt, "en_US"),
+                "name": get_i18n_block(inifile, f"alternatives.{alt}.name"),
+                "url_prefix": inifile.get(f"alternatives.{alt}.url_prefix"),
+                "url_suffix": inifile.get(f"alternatives.{alt}.url_suffix"),
+                "primary": inifile.get_bool(f"alternatives.{alt}.primary"),
+                "locale": inifile.get(f"alternatives.{alt}.locale", "en_US"),
             }
 
     for alt, alt_data in config["ALTERNATIVES"].items():
@@ -116,7 +100,7 @@ class ServerInfo:
         match = re.match(r"([a-z]+)://([^/]+)", self.target)
         if match is not None:
             protocol, server = match.groups()
-            return "%s via %s" % (server, protocol)
+            return f"{server} via {protocol}"
         return self.target
 
     def to_json(self):
@@ -201,7 +185,7 @@ class Config:
         return sorted(self.values["ALTERNATIVES"])
 
     def iter_alternatives(self):
-        """Iterates over all alterantives.  If the system is disabled this
+        """Iterates over all alternatives.  If the system is disabled this
         yields '_primary'.
         """
         found = False
@@ -273,7 +257,7 @@ class Config:
     def base_url(self):
         """The external base URL."""
         url = self.values["PROJECT"].get("url")
-        if url and url_parse(url).scheme:
+        if url and urlsplit(url).scheme:
             return url.rstrip("/") + "/"
         return None
 
@@ -282,7 +266,7 @@ class Config:
         """The base path of the URL."""
         url = self.values["PROJECT"].get("url")
         if url:
-            return url_parse(url).path.rstrip("/") + "/"
+            return urlsplit(url).path.rstrip("/") + "/"
         return "/"
 
     @cached_property

@@ -45,14 +45,14 @@ const compareAlternatives = (a: Alternative, b: Alternative) => {
   return nameA === nameB ? 0 : nameA < nameB ? -1 : 1;
 };
 
-function Sidebar(): JSX.Element | null {
+function Sidebar(): React.JSX.Element | null {
   const page = useContext(PageContext);
   const path = useRecordPath();
 
   const [recordInfo, setRecordInfo] = useState<RecordInfo | null>(null);
   const [childrenPage, setChildrenPage] = useState(1);
   const [childPosCache] = useState(() => new ChildPosCache());
-  const [updateForced, forceUpdate] = useReducer((x) => x + 1, 0);
+  const [updateForced, forceUpdate] = useReducer((x: number) => x + 1, 0);
 
   useEffect(() => {
     const handler = ({ detail }: CustomEvent<string>) => {
@@ -61,7 +61,9 @@ function Sidebar(): JSX.Element | null {
       }
     };
     subscribe("lektor-attachments-changed", handler);
-    return () => unsubscribe("lektor-attachments-changed", handler);
+    return () => {
+      unsubscribe("lektor-attachments-changed", handler);
+    };
   }, [path]);
 
   useEffect(() => {

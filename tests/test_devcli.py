@@ -2,6 +2,7 @@ import os
 import textwrap
 
 import pytest
+from iniconfig import IniConfig
 from inifile import IniFile
 
 import lektor.quickstart
@@ -42,27 +43,35 @@ def default_author_email(mocker):
     return email
 
 
+def _pack_lines(*lines: str) -> str:
+    """Pack input lines into single string."""
+    return "\n".join(lines) + "\n"
+
+
 # new-plugin
 def test_new_plugin(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin"],
-        input="Plugin Name\n" "\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Plugin Name", "", "Author Name", "author@email.com", "y"),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
     path = os.path.join("packages", "plugin-name")
-    assert set(os.listdir(path)) == set(
-        ["lektor_plugin_name.py", "setup.cfg", "setup.py", ".gitignore", "README.md"]
-    )
+    assert set(os.listdir(path)) == {
+        "lektor_plugin_name.py",
+        "pyproject.toml",
+        "setup.cfg",
+        ".gitignore",
+        "README.md",
+    }
 
     # gitignore
     gitignore_expected = textwrap.dedent(
         """
-        dist
-        build
-        *.pyc
-        *.pyo
+        /dist
+        /build
+        __pycache__
         *.egg-info
     """
     ).strip()
@@ -83,69 +92,30 @@ def test_new_plugin(project_cli_runner):
         readme_contents = f.read().strip()
     assert readme_contents == readme_expected
 
-    # setup.py
-    setup_expected = textwrap.dedent(
-        """
-        import ast
-        import io
-        import re
-
-        from setuptools import setup, find_packages
-
-        with io.open('README.md', 'rt', encoding="utf8") as f:
-            readme = f.read()
-
-        _description_re = re.compile(r'description\\s+=\\s+(?P<description>.*)')
-
-        with open('lektor_plugin_name.py', 'rb') as f:
-            description = str(ast.literal_eval(_description_re.search(
-                f.read().decode('utf-8')).group(1)))
-
-        setup(
-            author='Author Name',
-            author_email='author@email.com',
-            description=description,
-            keywords='Lektor plugin',
-            license='MIT',
-            long_description=readme,
-            long_description_content_type='text/markdown',
-            name='lektor-plugin-name',
-            packages=find_packages(),
-            py_modules=['lektor_plugin_name'],
-            # url='[link to your repository]',
-            version='0.1',
-            classifiers=[
-                'Framework :: Lektor',
-                'Environment :: Plugins',
-            ],
-            entry_points={
-                'lektor.plugins': [
-                    'plugin-name = lektor_plugin_name:PluginNamePlugin',
-                ]
-            }
-        )
-    """
-    ).strip()
-
-    with open(os.path.join(path, "setup.py"), encoding="utf-8") as f:
-        setup_contents = f.read().strip()
-    assert setup_contents == setup_expected
+    setup = IniConfig(os.path.join(path, "setup.cfg"))
+    assert setup.get("metadata", "name") == "lektor-plugin-name"
+    assert setup.get("metadata", "author") == "Author Name"
+    assert setup.get("metadata", "author_email") == "author@email.com"
+    assert setup.get("options", "py_modules") == "lektor_plugin_name"
+    assert (
+        setup.get("options.entry_points", "lektor.plugins")
+        == "plugin-name = lektor_plugin_name:PluginNamePlugin"
+    )
 
     # plugin.py
     plugin_expected = textwrap.dedent(
         """
-        # -*- coding: utf-8 -*-
         from lektor.pluginsystem import Plugin
 
 
         class PluginNamePlugin(Plugin):
             name = 'Plugin Name'
-            description = u'Add your description here.'
+            description = "Add your description here."
 
             def on_process_template_context(self, context, **extra):
                 def test_function():
-                    return 'Value from plugin %s' % self.name
-                context['test_function'] = test_function
+                    return f"Value from plugin {self.name}"
+                context["test_function"] = test_function
     """
     ).strip()
     with open(os.path.join(path, "lektor_plugin_name.py"), encoding="utf-8") as f:
@@ -167,7 +137,7 @@ def test_new_plugin_abort_cancel(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin"],
-        input="Plugin Name\n" "\n" "Author Name\n" "author@email.com\n" "n\n",
+        input=_pack_lines("Plugin Name", "", "Author Name", "author@email.com", "n"),
     )
     assert "Aborted!" in result.output
     assert result.exit_code == 1
@@ -177,66 +147,23 @@ def test_new_plugin_name_only(project_cli_runner, default_author, default_author
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin"],
-        input="Plugin Name\n" "\n" "\n" "\n" "y\n",
+        input=_pack_lines("Plugin Name", "", "", "", "y"),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
     path = "packages"
     assert os.listdir(path) == ["plugin-name"]
 
-    # setup.py
-    setup_expected = textwrap.dedent(
-        f"""
-        import ast
-        import io
-        import re
-
-        from setuptools import setup, find_packages
-
-        with io.open('README.md', 'rt', encoding="utf8") as f:
-            readme = f.read()
-
-        _description_re = re.compile(r'description\\s+=\\s+(?P<description>.*)')
-
-        with open('lektor_plugin_name.py', 'rb') as f:
-            description = str(ast.literal_eval(_description_re.search(
-                f.read().decode('utf-8')).group(1)))
-
-        setup(
-            author='{default_author}',
-            author_email='{default_author_email}',
-            description=description,
-            keywords='Lektor plugin',
-            license='MIT',
-            long_description=readme,
-            long_description_content_type='text/markdown',
-            name='lektor-plugin-name',
-            packages=find_packages(),
-            py_modules=['lektor_plugin_name'],
-            # url='[link to your repository]',
-            version='0.1',
-            classifiers=[
-                'Framework :: Lektor',
-                'Environment :: Plugins',
-            ],
-            entry_points={{
-                'lektor.plugins': [
-                    'plugin-name = lektor_plugin_name:PluginNamePlugin',
-                ]
-            }}
-        )
-    """
-    ).strip()
-    with open(os.path.join(path, "plugin-name", "setup.py"), encoding="utf-8") as f:
-        setup_contents = f.read().strip()
-    assert setup_contents == setup_expected
+    setup = IniConfig(os.path.join(path, "plugin-name", "setup.cfg"))
+    assert setup.get("metadata", "author") == default_author
+    assert setup.get("metadata", "author_email") == default_author_email
 
 
 def test_new_plugin_name_param(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin", "plugin-name"],
-        input="\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("", "Author Name", "author@email.com", "y"),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
@@ -248,42 +175,56 @@ def test_new_plugin_path(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin"],
-        input="Plugin Name\n" "path\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines(
+            "Plugin Name", "path", "Author Name", "author@email.com", "y"
+        ),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["lektor_plugin_name.py", "setup.cfg", "setup.py", ".gitignore", "README.md"]
-    )
+    assert set(os.listdir(path)) == {
+        "lektor_plugin_name.py",
+        "pyproject.toml",
+        "setup.cfg",
+        ".gitignore",
+        "README.md",
+    }
 
 
 def test_new_plugin_path_param(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin", "--path", "path"],
-        input="Plugin Name\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Plugin Name", "Author Name", "author@email.com", "y"),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["lektor_plugin_name.py", "setup.cfg", "setup.py", ".gitignore", "README.md"]
-    )
+    assert set(os.listdir(path)) == {
+        "lektor_plugin_name.py",
+        "pyproject.toml",
+        "setup.cfg",
+        ".gitignore",
+        "README.md",
+    }
 
 
 def test_new_plugin_path_and_name_params(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-plugin", "plugin-name", "--path", "path"],
-        input="Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Author Name", "author@email.com", "y"),
     )
     assert "Create Plugin?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["lektor_plugin_name.py", "setup.cfg", "setup.py", ".gitignore", "README.md"]
-    )
+    assert set(os.listdir(path)) == {
+        "lektor_plugin_name.py",
+        "pyproject.toml",
+        "setup.cfg",
+        ".gitignore",
+        "README.md",
+    }
 
 
 # new-theme
@@ -291,18 +232,20 @@ def test_new_theme(project_cli_runner, can_symlink):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme"],
-        input="Lektor Theme Name\n" "\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines(
+            "Lektor Theme Name", "", "Author Name", "author@email.com", "y"
+        ),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
     path = os.path.join("themes", "lektor-theme-name")
-    assert set(os.listdir(path)) == set(
-        ["example-site", "images", "README.md", "theme.ini"]
-    )
-    assert set(os.listdir(os.path.join(path, "images"))) == set(["homepage.png"])
-    assert set(os.listdir(os.path.join(path, "example-site"))) == set(
-        ["lektor-theme-name.lektorproject", "README.md", "themes"]
-    )
+    assert set(os.listdir(path)) == {"example-site", "images", "README.md", "theme.ini"}
+    assert set(os.listdir(os.path.join(path, "images"))) == {"homepage.png"}
+    assert set(os.listdir(os.path.join(path, "example-site"))) == {
+        "lektor-theme-name.lektorproject",
+        "README.md",
+        "themes",
+    }
     if can_symlink:
         assert (
             os.readlink(os.path.join(path, "example-site/themes/lektor-theme-name"))
@@ -333,7 +276,7 @@ def test_new_theme_abort_cancel(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme"],
-        input="Theme Name\n" "\n" "Author Name\n" "author@email.com\n" "n\n",
+        input=_pack_lines("Theme Name", "", "Author Name", "author@email.com", "n"),
     )
     assert "Aborted!" in result.output
     assert result.exit_code == 1
@@ -345,18 +288,18 @@ def test_new_theme_name_only(
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme"],
-        input="Lektor Name Theme\n" "\n" "\n" "\n" "y\n",
+        input=_pack_lines("Lektor Name Theme", "", "", "", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
     path = os.path.join("themes", "lektor-theme-name")
-    assert set(os.listdir(path)) == set(
-        ["example-site", "images", "README.md", "theme.ini"]
-    )
-    assert set(os.listdir(os.path.join(path, "images"))) == set(["homepage.png"])
-    assert set(os.listdir(os.path.join(path, "example-site"))) == set(
-        ["lektor-theme-name.lektorproject", "README.md", "themes"]
-    )
+    assert set(os.listdir(path)) == {"example-site", "images", "README.md", "theme.ini"}
+    assert set(os.listdir(os.path.join(path, "images"))) == {"homepage.png"}
+    assert set(os.listdir(os.path.join(path, "example-site"))) == {
+        "lektor-theme-name.lektorproject",
+        "README.md",
+        "themes",
+    }
     if can_symlink:
         assert (
             os.readlink(os.path.join(path, "example-site/themes/lektor-theme-name"))
@@ -377,7 +320,7 @@ def test_new_theme_name_param(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme", "theme-name"],
-        input="\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("", "Author Name", "author@email.com", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
@@ -389,42 +332,36 @@ def test_new_theme_path(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme"],
-        input="Theme Name\n" "path\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Theme Name", "path", "Author Name", "author@email.com", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["example-site", "images", "theme.ini", "README.md"]
-    )
+    assert set(os.listdir(path)) == {"example-site", "images", "theme.ini", "README.md"}
 
 
 def test_new_theme_path_param(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme", "--path", "path"],
-        input="Theme Name\n" "Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Theme Name", "Author Name", "author@email.com", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["example-site", "images", "theme.ini", "README.md"]
-    )
+    assert set(os.listdir(path)) == {"example-site", "images", "theme.ini", "README.md"}
 
 
 def test_new_theme_path_and_name_params(project_cli_runner):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme", "theme-name", "--path", "path"],
-        input="Author Name\n" "author@email.com\n" "y\n",
+        input=_pack_lines("Author Name", "author@email.com", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0
     path = "path"
-    assert set(os.listdir(path)) == set(
-        ["example-site", "images", "theme.ini", "README.md"]
-    )
+    assert set(os.listdir(path)) == {"example-site", "images", "theme.ini", "README.md"}
 
 
 @pytest.mark.parametrize(
@@ -439,11 +376,12 @@ def test_new_theme_path_and_name_params(project_cli_runner):
         ("Lektor Theme New", "lektor-theme-new"),
     ),
 )
+@pytest.mark.usefixtures("default_author", "default_author_email")
 def test_new_theme_varying_names(project_cli_runner, theme_name, expected_id):
     result = project_cli_runner.invoke(
         cli,
         ["dev", "new-theme"],
-        input="{}\n" "\n" "\n" "\n" "y\n".format(theme_name),
+        input=_pack_lines(f"{theme_name}", "", "", "", "y"),
     )
     assert "Create Theme?" in result.output
     assert result.exit_code == 0

@@ -6,6 +6,7 @@ This tests for at least one of the bugs reported in `#410`_, namely
 .. _#410: https://github.com/lektor/lektor/issues/410
 
 """
+
 import os
 
 import pytest
@@ -21,7 +22,7 @@ def scratch_project_data(scratch_project_data, request):
     # Specialize the inherited scratch project (from conftest.py)
     # by (possibly) enabling pagination for models/page.ini.
     is_paginated = request.param
-    page_ini = scratch_project_data.join("models", "page.ini")
+    page_ini = scratch_project_data / "models/page.ini"
     if is_paginated:
         page_ini.write_text(
             "\n".join(

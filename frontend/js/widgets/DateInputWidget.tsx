@@ -27,7 +27,7 @@ export function validateDate(value: string): string | null {
     isValidDate(
       parseInteger(groups.year),
       parseInteger(groups.month),
-      parseInteger(groups.day)
+      parseInteger(groups.day),
     )
   ) {
     return null;
@@ -54,7 +54,7 @@ export function postprocessDate(value: string): string {
 
 const inputAddon = <i className="fa fa-calendar" />;
 
-export function DateInputWidget(props: WidgetProps): JSX.Element {
+export function DateInputWidget(props: WidgetProps): React.JSX.Element {
   return (
     <InputWidgetBase
       inputType="date"

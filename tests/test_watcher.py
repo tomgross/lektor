@@ -1,156 +1,245 @@
-import functools
-import queue
+from __future__ import annotations
+
+import os
+import shutil
+import sys
 import threading
+import warnings
+from collections.abc import Callable
+from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 
-import py
 import pytest
-from watchdog.observers.api import BaseObserver
-from watchdog.observers.polling import PollingObserver
+from watchfiles import Change
 
-from lektor import utils
-from lektor.watcher import BasicWatcher
-from lektor.watcher import watch
-from lektor.watcher import Watcher
+from lektor.environment import Environment
+from lektor.project import Project
+from lektor.watcher import watch_project
+from lektor.watcher import WatchFilter
 
 
-class IterateInThread(threading.Thread):
-    """Iterate iterable in a separate thread.
+RunInThread = Callable[[Callable[[], None]], None]
 
-    This is a iterator which yields the results of the iterable.
-    I.e. mostly, it's transparent.
 
-    The results are passed back to the calling thread via a queue.  If
-    the queue remains empty for a bit of time a `Timeout` exception
-    will be raised.
+@pytest.fixture
+def run_in_thread() -> RunInThread:
+    threads = []
 
-    The timeout prevents the test from getting hung when expected
-    results are not forthcoming.
+    def run_thread(target: Callable[[], None]) -> None:
+        t = threading.Thread(target=target)
+        t.start()
+        threads.append(t)
 
-    """
+    try:
+        yield run_thread
+    finally:
+        for t in threads:
+            t.join(10.0)
+        for t in threads:
+            assert not t.is_alive()
 
-    timeout = 2.0
 
-    def __init__(self, it):
-        threading.Thread.__init__(self, daemon=True)
-        self.it = it
-        self.queue = queue.Queue()
-        self.start()
+@dataclass
+class WatchResult:
+    change_seen: bool = False
 
-    def run(self):
-        for item in self.it:
-            self.queue.put(item)
+    def __bool__(self):
+        return self.change_seen
 
-    def __next__(self):
+
+@dataclass
+class WatcherTest:
+    env: Environment
+    run_in_thread: RunInThread
+
+    @contextmanager
+    def __call__(
+        self,
+        timeout: float = 1.2,
+    ) -> Generator[WatchResult]:
+        """Run watch_project in a separate thread, wait for a file change event.
+
+        This is a context manager that runs watch_project in a separate thread.  After
+        the context exits, it will wait at most ``timeout`` seconds before returning.
+        If a file system change is seen, it will return immediately.
+
+        The context manager returns a WatchResult value.  After the context has been
+        exited, the result will be True-ish if a file system change was noticed,
+        False-ish otherwise.
+
+        """
+        if sys.platform == "darwin":
+            self.macos_pause_for_calm()
+
+        with self.watch(timeout) as change_seen:
+            yield change_seen
+
+    @contextmanager
+    def watch(
+        self,
+        timeout: float,
+    ) -> Generator[WatchResult]:
+        """Run watch_project in a separate thread, wait for a file change event."""
+        running = threading.Event()
+        stop = threading.Event()
+        changed = threading.Event()
+
+        def run() -> None:
+            watcher = watch_project(
+                self.env, "non-existant-output-path", stop_event=stop
+            )
+            running.set()
+            for _ in watcher:
+                changed.set()
+                return
+
+        self.run_in_thread(run)
+        result = WatchResult()
+        running.wait()
         try:
-            return self.queue.get(timeout=self.timeout)
-        except queue.Empty:
-            return pytest.fail("Timed out waiting for iterator")
+            yield result
+            result.change_seen = changed.wait(timeout)
+        finally:
+            stop.set()
 
-
-class BrokenObserver(PollingObserver):
-    # The InotifyObserver, when it fails due to insufficient system
-    # inotify resources, does not fail until an attempt is made to start it.
-    def start(self):
-        raise OSError("crapout")
-
-
-class TestBasicWatcher:
-    # pylint: disable=no-self-use
-
-    @pytest.fixture
-    def paths(self, tmp_path):
-        return [str(tmp_path)]
-
-    def test_creates_observer(self, paths):
-        with BasicWatcher(paths) as watcher:
-            assert isinstance(watcher.observer, BaseObserver)
-
-    def test_default_observer_broken(self, paths, capsys):
-        observer_classes = (BrokenObserver, PollingObserver)
-        with BasicWatcher(paths, observer_classes=observer_classes) as watcher:
-            assert watcher.observer.__class__ is PollingObserver
-        assert "crapout" in capsys.readouterr().out
-
-    def test_default_observer_is_polling(self, paths, capsys):
-        observer_classes = (BrokenObserver, BrokenObserver)
-        with pytest.raises(OSError, match=r"crapout"):
-            with BasicWatcher(paths, observer_classes=observer_classes):
+    def macos_pause_for_calm(self) -> None:
+        # Wait a bit for the dust to settle.
+        # For whatever reason, on macOS, the watcher sometimes seems to return
+        # filesystem events that happened shortly before it was started.
+        for n in range(5):
+            with self.watch(timeout=0.1) as change_seen:
                 pass
-        assert capsys.readouterr() == ("", "")
-
-    def test_perverse_usage(self, paths):
-        # This exercises a bug which occurred when BasicWatcher was
-        # called with repeated (failing) values in observer_classes.
-        observer_classes = (BrokenObserver, BrokenObserver, PollingObserver)
-        with BasicWatcher(paths, observer_classes=observer_classes) as watcher:
-            assert isinstance(watcher.observer, BaseObserver)
-
-    def test_raises_error_if_started_twice(self, paths):
-        with BasicWatcher(paths) as watcher:
-            with pytest.raises(RuntimeError, match="already started"):
-                watcher.start()
-
-    def test_iter(self, tmp_path):
-        file1 = tmp_path / "file1"
-        file1.touch()
-
-        with BasicWatcher([str(tmp_path)]) as watcher:
-            it = IterateInThread(watcher)
-
-            file2 = tmp_path / "file2"
-            file2.touch()
-            # Check that we get notified about file2
-            _, event_type, path = next(it)
-            print(event_type, path)
-            while path != str(file2):
-                # On MacOS, for whatever reason, we get events about
-                # the creation of tmp_path and file1.  Skip them.
-                _, event_type, path = next(it)
-                print(event_type, path)
-
-            file1_renamed = tmp_path / "file1_renamed"
-            file1.rename(file1_renamed)
-            # Check for notification of renamed file.
-            while path != str(file1_renamed):
-                # Depending on platform, we may get more than one
-                # event for file1. (E.g. on Linux we get both a
-                # 'created' and a 'closed' event.)
-                # (Also, on MacOS, for reasons not understood,
-                # we appear to get a 'created' event for file1.)
-                _, event_type, path = next(it)
-                print(event_type, path)
-
-            assert it.queue.empty()
+            if not change_seen:
+                break
+            warnings.warn(f"macOS settle loop {n}: {change_seen}")  # noqa: B028
 
 
-def test_is_interesting(env):
-    # pylint: disable=no-member
-    cache_dir = py.path.local(utils.get_cache_dir())
-    build_dir = py.path.local("build")
-
-    w = Watcher(env, str(build_dir))
-
-    # This partial makes the testing code shorter
-    is_interesting = functools.partial(w.is_interesting, 0, "generic")
-
-    assert is_interesting("a.file")
-    assert not is_interesting(".file")
-    assert not is_interesting(str(cache_dir / "another.file"))
-    assert not is_interesting(str(build_dir / "output.file"))
-
-    w.output_path = None
-    assert is_interesting(str(build_dir / "output.file"))
+@pytest.fixture
+def watcher_test(scratch_env: Environment, run_in_thread: RunInThread) -> WatcherTest:
+    return WatcherTest(scratch_env, run_in_thread)
 
 
-def test_watch(env, mocker):
-    Watcher = mocker.patch("lektor.watcher.Watcher")
-    event1 = mocker.sentinel.event1
+@pytest.fixture
+def watched_path(scratch_env: Environment) -> Path:
+    return Path(scratch_env.root_path)
 
-    def events():
-        yield event1
-        raise KeyboardInterrupt()
 
-    watcher = Watcher.return_value.__enter__.return_value
-    watcher.__iter__.return_value = events()
+def test_watcher_test(watcher_test: WatcherTest) -> None:
+    with watcher_test(timeout=0.2) as change_seen:
+        pass
+    assert not change_seen
 
-    assert list(watch(env)) == [event1]
+
+def test_sees_created_file(watcher_test: WatcherTest, watched_path: Path) -> None:
+    with watcher_test() as change_seen:
+        Path(watched_path, "created").touch()
+    assert change_seen
+
+
+def test_sees_deleted_file(watcher_test: WatcherTest, watched_path: Path) -> None:
+    deleted_path = watched_path / "deleted"
+    deleted_path.touch()
+
+    with watcher_test() as change_seen:
+        deleted_path.unlink()
+    assert change_seen
+
+
+def test_sees_modified_file(watcher_test: WatcherTest, watched_path: Path) -> None:
+    modified_path = watched_path / "modified"
+    modified_path.touch()
+
+    with watcher_test() as change_seen:
+        with modified_path.open("a") as fp:
+            fp.write("addition")
+    assert change_seen
+
+
+def test_sees_file_moved_in(
+    watcher_test: WatcherTest, watched_path: Path, tmp_path: Path
+) -> None:
+    orig_path = tmp_path / "orig_path"
+    orig_path.touch()
+    final_path = watched_path / "final_path"
+
+    with watcher_test() as change_seen:
+        orig_path.rename(final_path)
+    assert change_seen
+
+
+def test_sees_file_moved_out(
+    watcher_test: WatcherTest, watched_path: Path, tmp_path: Path
+) -> None:
+    orig_path = watched_path / "orig_path"
+    orig_path.touch()
+    final_path = tmp_path / "final_path"
+
+    with watcher_test() as change_seen:
+        orig_path.rename(final_path)
+    assert change_seen
+
+
+def test_sees_deleted_directory(watcher_test: WatcherTest, watched_path: Path) -> None:
+    # We only really care about deleted directories that contain at least a file.
+    deleted_path = watched_path / "deleted"
+    deleted_path.mkdir()
+    watched_file = deleted_path / "file"
+    watched_file.touch()
+
+    with watcher_test() as change_seen:
+        shutil.rmtree(deleted_path)
+    assert change_seen
+
+
+def test_sees_file_in_directory_moved_in(
+    watcher_test: WatcherTest, watched_path: Path, tmp_path: Path
+) -> None:
+    # We only really care about directories that contain at least a file.
+    orig_dir_path = tmp_path / "orig_dir_path"
+    orig_dir_path.mkdir()
+    Path(orig_dir_path, "file").touch()
+    final_dir_path = watched_path / "final_dir_path"
+
+    with watcher_test() as change_seen:
+        orig_dir_path.rename(final_dir_path)
+    assert change_seen
+
+
+def test_sees_directory_moved_out(
+    watcher_test: WatcherTest, watched_path: Path, tmp_path: Path
+) -> None:
+    # We only really care about directories that contain at least one file.
+    orig_dir_path = watched_path / "orig_dir_path"
+    orig_dir_path.mkdir()
+    Path(orig_dir_path, "file").touch()
+    final_dir_path = tmp_path / "final_dir_path"
+
+    with watcher_test() as change_seen:
+        orig_dir_path.rename(final_dir_path)
+    assert change_seen
+
+
+def test_ignores_opened_file(watcher_test: WatcherTest, watched_path: Path) -> None:
+    file_path = watched_path / "file"
+    file_path.touch()
+
+    with watcher_test() as change_seen:
+        with file_path.open() as fp:
+            fp.read()
+    assert not change_seen
+
+
+@pytest.fixture(scope="session")
+def watch_filter(project: Project) -> WatchFilter:
+    env = Environment(project, load_plugins=False)
+    return WatchFilter(env)
+
+
+@pytest.mark.parametrize("path", [".dotfile", "webpack/node_modules"])
+def test_WatchFilter_false(
+    watch_filter: WatchFilter, path: str, project: Project
+) -> None:
+    abspath = os.path.abspath(os.path.join(project.tree, path))
+    assert not watch_filter(Change.added, abspath)

@@ -10,7 +10,7 @@ export default function ChildPagination({
   page: number;
   numberOfChildren: number;
   setPage: (n: number) => void;
-}): JSX.Element | null {
+}): React.JSX.Element | null {
   const pages = Math.ceil(numberOfChildren / CHILDREN_PER_PAGE);
   if (pages <= 1) {
     return null;
@@ -30,7 +30,7 @@ export default function ChildPagination({
       ) : (
         <em>«</em>
       )}
-      <span className="page">{page + " / " + pages}</span>
+      <span className="page">{`${page} / ${pages}`}</span>
       {page < pages ? (
         <a
           href="#"

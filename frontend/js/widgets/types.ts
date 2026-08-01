@@ -29,13 +29,13 @@ export interface Field {
   alts_enabled: boolean | null;
 }
 
-export type WidgetProps<V = string, W = WidgetType> = {
+export interface WidgetProps<V = string, W = WidgetType> {
   value: V;
   type: W;
   placeholder?: V;
   onChange: (value: SetStateAction<V>) => void;
   disabled?: boolean;
-};
+}
 
 interface SerializableWidget {
   deserializeValue?: (value: string, type: WidgetType) => string;
@@ -54,9 +54,9 @@ export type WidgetComponent = FakeWidget | RealWidget;
 
 export function getInputClass(type: WidgetType): string {
   if (type.size === "small") {
-    return "form-control input-sm";
+    return "form-control form-control-sm";
   } else if (type.size === "large") {
-    return "form-control input-lg";
+    return "form-control form-control-lg";
   }
   return "form-control";
 }

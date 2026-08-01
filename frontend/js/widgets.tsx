@@ -69,8 +69,10 @@ export const FieldBox = React.memo(function FieldBox(props: {
   const { field, value, placeholder, disabled, setFieldValue } = props;
 
   const onChange = useCallback(
-    (value: SetStateAction<string>) => setFieldValue(field.name, value),
-    [field, setFieldValue]
+    (value: SetStateAction<string>) => {
+      setFieldValue(field.name, value);
+    },
+    [field, setFieldValue],
   );
   const className = `col-md-${getFieldColumns(field)}`;
 
@@ -78,6 +80,7 @@ export const FieldBox = React.memo(function FieldBox(props: {
   if (Widget.isFakeWidget) {
     return (
       <div className={className} key={field.name}>
+        {/*eslint-disable-next-line react-hooks/static-components */}
         <Widget key={field.name} field={field} />
       </div>
     );
@@ -93,6 +96,7 @@ export const FieldBox = React.memo(function FieldBox(props: {
         {!field.hide_label ? <dt>{trans_obj(field.label_i18n)}</dt> : null}
         <dd>
           {description}
+          {/*eslint-disable-next-line react-hooks/static-components */}
           <Widget
             value={value}
             onChange={onChange}
@@ -108,13 +112,15 @@ export const FieldBox = React.memo(function FieldBox(props: {
 
 export function getWidgetComponent(type: WidgetType): WidgetComponent | null {
   // @ts-expect-error This is hard to type and not typed yet.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
   return widgetComponents[type.widget] || null;
 }
 
 export function getWidgetComponentWithFallback(
-  type: WidgetType
+  type: WidgetType,
 ): WidgetComponent {
   // @ts-expect-error This is hard to type and not typed yet.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
   return widgetComponents[type.widget] || FallbackWidget;
 }
 
@@ -183,7 +189,7 @@ export function FieldRows({
 }: {
   fields: Field[];
   renderFunc: (field: Field) => ReactNode;
-}): JSX.Element {
+}): React.JSX.Element {
   const rows = useMemo(() => processFields(fields), [fields]);
   return (
     <>

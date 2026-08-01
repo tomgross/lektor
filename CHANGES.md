@@ -2,14 +2,659 @@
 
 These are all the changes in Lektor since the first public release.
 
-## 3.4.0 (unreleased)
+## 3.4.0b14 (2026-05-05)
+
+### Features
+
+- The `lektor.pluginsystem.Plugin` base class now provides sane
+  defaults for the `Plugin.name` and `Plugin.description` attributes. ([#1253])
+
+### Fixes
+
+- Fix `Query.include_hidden` so that it actually causes hidden records to be included.
+  This fixes a [long-standing bug][#358].
+  In edge-cases, this change may affect existing projects. ([#1251], [#1229])
+- Improve error message when CLI can not find project. Thank you, Antonia Cavallo!
+  ([#1257])
+- Builder: update build db schema to use real flag to mark virtual sources, rather
+  than relying on broken heuristics. Thank you, Patrick Gerken! ([#1223])
+- Use `importlib.metadata.entry_points` to find installed plugins. This fixes some
+  edge-case "plugin is already registered" errors. ([#1253])
+
+### Frontend
+
+- Modernize build script, use node-native test runner. ([#1259])
+- Use `npm install --no-save` during package build to avoid dirtying git source ([#1254])
+- Dependency bumps. ([#1256], [#1263], [#1264], [#1265], [#1266])
+
+### CI
+
+- Disuse codecov.io for aggregation of code coverage. Add combined
+  coverage reporting CI job. ([#1192])
+
+[#358]: https://github.com/lektor/lektor/issues/358
+[#1223]: https://github.com/lektor/lektor/pull/1223
+[#1229]: https://github.com/lektor/lektor/issues/1229
+[#1251]: https://github.com/lektor/lektor/pull/1251
+[#1253]: https://github.com/lektor/lektor/pull/1253
+[#1254]: https://github.com/lektor/lektor/pull/1254
+[#1256]: https://github.com/lektor/lektor/pull/1256
+[#1257]: https://github.com/lektor/lektor/pull/1257
+[#1259]: https://github.com/lektor/lektor/pull/1259
+[#1263]: https://github.com/lektor/lektor/pull/1263
+[#1264]: https://github.com/lektor/lektor/pull/1264
+[#1265]: https://github.com/lektor/lektor/pull/1265
+[#1266]: https://github.com/lektor/lektor/pull/1266
+
+## 3.4.0b13 (2026-02-11)
+
+### Changes
+
+- Dropped support for python 3.8 and 3.9. Test under 3.13 and 3.14.
+
+### Fixes
+
+- Fix ghpages publisher for git 2.46 ([d5e87d9])
+- Fix file mode of created files ([#1214])
+- Fix bug in url generation ([#1080])
+- Fix database connection leak ([#1242])
+- Fix to support `marshmallow 4` ([#1222])
+- Various npm package updates in frontend code, including update to react 19.
+
+[d5e87d9]: https://github.com/lektor/lektor/commit/d5e87d9f8b54a06d12b8262fb4155f0aff5c1df8
+[#1080]: https://github.com/lektor/lektor/issues/1080
+[#1214]: https://github.com/lektor/lektor/pull/1214
+[#1222]: https://github.com/lektor/lektor/pull/1222
+[#1242]: https://github.com/lektor/lektor/pull/1242
+
+## 3.4.0b12 (2024-05-14)
+
+### Bugs
+
+#### Admin server
+
+- Fix route declaration for the `add-child` endpoint. (Thanks to
+  @mjoerg [#1184])
+
+[#1184]: https://github.com/lektor/lektor/pull/1184
+
+## 3.4.0b11 (2024-02-27)
+
+### Security
+
+Prior to this release it was possible to create files outside of the
+`content` tree using the admin API. (Normally, the admin API should not
+be made accessible to untrusted parties, since the point of the API to
+to allow for editing of the Lektor project content.)
+
+- Better sanitation of DB file paths, better validation of path passed
+  to `make_editor_session`. ([#1179])
+- Better validation of API parameters. ([#1181])
+
+[#1179]: https://github.com/lektor/lektor/pull/1179
+[#1181]: https://github.com/lektor/lektor/pull/1181
+
+## 3.4.0b10 (2024-01-07)
+
+### Bugs Fixed
+
+#### Admin Server
+
+- Fix `"re.error: bad escape \u"` exception. ([#1177])
+
+[#1177]: https://github.com/lektor/lektor/pull/1177
+
+## 3.4.0b9 (2023-11-12)
+
+### Compatibility
+
+- Drop support for python 3.7. ([#1173])
+- Officially support python 3.12. ([#1167])
+- Remove pin on `werkzeug<3`. ([#1172], [#1171])
+
+### Refactorings
+
+This release includes a significant continuation of refactoring of the
+code in `lektor.imagetools` which started in [#1104]:
+
+- We now use Pillow to access image file metadata (e.g. dimensions,
+  format, and EXIF tags). This replaces some homegrown code for
+  reading basic image metadata and `exifread` for EXIF tag access.
+
+- Some internal API has been cleaned up.
+
+- Compatibility with various versions of Pillow has been increased.
+
+See [#1138] for details.
+
+### Features Removed
+
+- Removed `--no-reload` option to the `lektor server` command. This was added in 3.4.0b4 as part of #1027 and seems no longer necessary since now live-reload can be disabled on a per-window bases (see #1164).
+
+### Features Added
+
+- Added Turkish translation. Thank you [\@uyar]! ([#1157])
+
+#### Admin GUI
+
+- Replace the _“Edit Pencil”_ with a toolbar containing both an _Edit_
+  button and a toggle that can be used to disable
+  _Live-reload_. ([#1164])
+
+### Bugs Fixed
+
+#### Admin GUI
+
+- Use a real link (`<a href=...`) for the "Return to Website" button. ([#1164])
+
+#### Jinja Globals
+
+- Fix `bag()` to object the pad from `site` in the Jinja context, rather than from the Lektor build context. ([#1155])
+
+#### Plugins
+
+- Use symlinks when constructing Lektor's private virtual
+  environment. This fixes issues install plugins on macOS. ([#1161],
+  [#1159])
+
+### Style
+
+- Update prettier, update eslint rules. ([#1153])
+- Update to latest pylint, black, flake8. Use flake8-bugbear. ([#1162])
+- Update npm locks, upgrade esbuild, update tests to React 18 APIs. ([#1170])
+- Apply `pyupgrade --py38-plus` to code base ([#1174])
+
+[\@uyar]: https://github.com/uyar
+[#1138]: https://github.com/lektor/lektor/pull/1138
+[#1153]: https://github.com/lektor/lektor/pull/1153
+[#1155]: https://github.com/lektor/lektor/pull/1155
+[#1157]: https://github.com/lektor/lektor/pull/1157
+[#1159]: https://github.com/lektor/lektor/issues/1159
+[#1161]: https://github.com/lektor/lektor/pull/1161
+[#1162]: https://github.com/lektor/lektor/pull/1162
+[#1164]: https://github.com/lektor/lektor/pull/1164
+[#1167]: https://github.com/lektor/lektor/pull/1167
+[#1170]: https://github.com/lektor/lektor/issues/1170
+[#1171]: https://github.com/lektor/lektor/issues/1171
+[#1172]: https://github.com/lektor/lektor/pull/1172
+[#1173]: https://github.com/lektor/lektor/pull/1173
+[#1174]: https://github.com/lektor/lektor/pull/1174
+
+## 3.4.0b8 (2023-06-06)
+
+### Bugs Fixed
+
+- When there are multiple _asset_ trees being merged (i.e. when
+  _themes_ are in use), avoid building shadowed assets. ([#908],
+  [#1147])
+- Fix asset URL resolution in the dev server when asset extensions
+  differ from that of their source. ([#1111], [#1147])
+
+[#908]: https://github.com/lektor/lektor/issues/908
+[#1111]: https://github.com/lektor/lektor/issues/1111
+[#1147]: https://github.com/lektor/lektor/pull/1147
+
+## 3.4.0b7 (2023-06-04)
+
+### Slightly Breaking Changes
+
+- The `--profile` option has been removed from the `lektor build` command. ([#1137])
+
+### Bugs Fixed
+
+- Pin `watchfiles>=0.12`. (Our tests use the `stop_event` parameter of `watchfiles.watch`.)
+- Fix exception from `describe_build_func` when building thumbnails with verbose logging enabled.
+- Fix "FATAL: exception not re-thrown" message when `lektor server` is stopped. ([#1145])
+- Fix multiple browser new tabs when `lektor server --browse` is used with `LEKTOR_DEV` set ([#1145])
+- Fix mypy errors in `lektor.admin.modules`.
+- Fix `Builder.touch_site_config` so that it actually touches the site
+  config. This fixes the _Refresh Build_ button of the admin
+  UI. ([#1146])
+- Ensure that `Artifact.open` respects the value of its `encoding` argument when opening files. ([#1146])
+- Fix logic flaw in `FileInfo.unchanged` which, under certain
+  circumstances, causes source files to be considered unchanged even
+  if their size (or mtime) is changed. ([#1146])
+
+[#1137]: https://github.com/lektor/lektor/pull/1137
+[#1145]: https://github.com/lektor/lektor/pull/1145
+[#1146]: https://github.com/lektor/lektor/pull/1146
+
+## 3.4.0b6 (2023-05-05)
+
+### Possibly Breaking Changes
+
+- Our Publisher API has changed. This will eventually require updates
+  to any custom Publisher classes provided by Lektor
+  plugins. Previously, the `publish` method of `Publisher` subclasses
+  was passed a `werkzeug.urls.URL` instance as its `target_url`
+  argument. Werkzeug has deprecated the `URL` class, so now the
+  `target_url` will be passed as a string. (The publishers are now
+  responsible for was parsing the target URL themselves.) For the
+  interim, in an effort to avoid immediately breaking existing
+  plugins, we pass a fancy subclass of `str` that implements most of
+  the attributes and methods of `werkzeug.urls.URL`. ([#1143], [#1142])
+
+- Interpret relative paths passed via the `--output-path` command-line
+  parameter relative to the current working directory. Interpret
+  relative paths configured for `output_path` in the _project file_
+  relative to the directory containing the project file (as the
+  [docs](https://www.getlektor.com/docs/project/file/#project) claim
+  should happen). Previously, both paths were interpreted —
+  incorrectly, in both cases — relative to the _project directory_.
+  ([#1103], [#1120])
+
+- The `query` attribute of fields of type `"url"` now returns the
+  IRI-encoded (internationalized) version of the URL query. (This
+  matches the existing behavior of the `host`, `path`, and `anchor`
+  attributes.) ([#1143])
+
+### Deprecations
+
+- The (unused) `lektor.db.Pad.make_absolute_url` method is deprecated. ([#1143])
+
+### Features
+
+- We now use [Pillow] (instead of ImageMagick) to generate image
+  thumbnails. Installation of ImageMagick was a significant pain-point
+  for some. In addition the Pillow-based thumbnailing code appears to
+  be noticeably faster than the ImageMagick version. ([#1104])
+
+- A _Preferences Dialog_ has been added to the admin GUI that allows
+  customization of which hotkeys trigger the _Save_, _Edit_,
+  _(Save &) Preview_, and _Search_ actions. ([#1052])
+
+### Bugs Fixed
+
+- Re-export `ImprovedRenderer`, `MarkdownConfig`, and `escape` from
+  `lektor.markdown`. These were removed in [#992] when support for
+  mistune 2.x was added. Restoring them allows most older plugins
+  written for Lektor<3.4 to work, so long as mistune is pinned to
+  version 0.x. ([#1134])
+
+- Better input validation and error reporting for the `dateformat`,
+  `timeformat` and `datetimeformat` jinja filters. Previously, these
+  filters did not handle unexpected input types gracefully. ([#1122],
+  [#1121])
+
+- Allow the user to customize the python [warnings filter] when
+  running the CLI. Previously, Lektor unconditionally set the
+  warnings filter to `"default"` (enabling one-shot display of _all_
+  warning types.) Now, if the warnings filter has been explicitly set
+  (via [PYTHONWARNINGS] or [-W][python-W]) it is left
+  alone. ([e2d0274])
+- DB-path URL resolution of relative paths from _virtual source objects_. ([#1133])
+
+- Relative URL-path resolution from pages with "." in their slug. ([#1133])
+
+- Avoid the use of `warnings.catch_warnings` which was introduced in
+  [#1113]. Its use resets the warnings registry resulting in undesired
+  repetition of seen warnings. ([#1135]).
+
+### Bit-Rot
+
+- Update frontend npm dependencies. ([#1126])
+
+### Other Changes
+
+- Use [watchfiles] instead of `watchdog` when monitoring for file changes. ([#1136])
+
+- Optimization: Thumbnail file names are now generated based on the
+  final thumbnail parameters (e.g. their actual dimensions, rather than
+  their requested dimensions.) This minimizes the possibility of generating
+  multiple identical thumbnails with different file names. ([#1139])
+
+- Tighten [click] constraints on Path parameters. This results in
+  better and earlier error messages when, e.g., a readable file is
+  expected, but a path to a directory is passed. ([#1124])
+
+- We reduced the size of our distribution wheel and sdist files by
+  roughly factor of two by omitting all but the `.woff2` variants of
+  the fonts for the frontend, and by excluding [sourcesContent] from
+  the JS and CSS sourcemaps. ([#1130], [#1115])
+
+[e2d0274]: https://github.com/lektor/lektor/commit/e2d02746a488e4a4d05ba8a01443e7a90315a2fb
+[#1052]: https://github.com/lektor/lektor/pull/1052
+[#1103]: https://github.com/lektor/lektor/issues/1103
+[#1104]: https://github.com/lektor/lektor/pull/1104
+[#1115]: https://github.com/lektor/lektor/issues/1115
+[#1120]: https://github.com/lektor/lektor/pull/1120
+[#1121]: https://github.com/lektor/lektor/issues/1121
+[#1122]: https://github.com/lektor/lektor/pull/1122
+[#1124]: https://github.com/lektor/lektor/pull/1124
+[#1126]: https://github.com/lektor/lektor/pull/1126
+[#1130]: https://github.com/lektor/lektor/pull/1130
+[#1133]: https://github.com/lektor/lektor/pull/1133
+[#1134]: https://github.com/lektor/lektor/pull/1134
+[#1136]: https://github.com/lektor/lektor/pull/1136
+[#1139]: https://github.com/lektor/lektor/pull/1139
+[#1142]: https://github.com/lektor/lektor/issues/1142
+[#1143]: https://github.com/lektor/lektor/pull/1143
+[click]: https://pypi.org/project/click/
+[warnings filter]: https://docs.python.org/3/library/warnings.html#the-warnings-filter
+[PYTHONWARNINGS]: https://docs.python.org/3/using/cmdline.html#envvar-PYTHONWARNINGS
+[python-W]: https://docs.python.org/3/using/cmdline.html#cmdoption-W
+[Pillow]: https://pillow.readthedocs.io/en/stable/
+[sourcesContent]: https://esbuild.github.io/api/#sources-content
+[watchfiles]: https://github.com/samuelcolvin/watchfiles
+
+## 3.4.0b5 (2023-03-08)
+
+### Breaking Changes
+
+- Removed the `lektor dev publish-plugin` command. (To publish a
+  plugin to PyPI, use [twine].) ([#1065])
+
+- Removed `SourceObject.iter_virtual_sources()` from our API. ([#1106])
+
+- Removed support for `config["LESSC_EXECUTABLE"]`. (There is no sign
+  that it has ever been used.) ([edb35f9])
+
+- Removed support for `BuildState.make_named_temporary` method. It has
+  been totally broken for awhile — so clearly it is not used.<br>
+  Also remove _context manager_ protocol support from `BuildState` — it was
+  only there to support `BuildState.make_named_temporary`. ([6f11bad])
+
+### Bugs Fixed
+
+- Fix several issues involving the installation of local plugin packages.
+  We now install plugins into a _bone fide_ virtual environment, rather
+  than using pip’s `--target` parameter. ([#1065], [#1028], [#865])
+
+- Fix template `markdown` filter (broken in [#992]). ([#1102] [#1100])
+
+- Fix dependency tracking to record the `alt` of _virtual sources_ as
+  well as their `path`. ([#1108], [#1007], [#959])
+
+- Fix equality semantics for `Record` and `VirtualSourceObject`. These
+  are now considered “equal” only if their _path_ (including _page
+  number_, in the case of pages), _alt_, and _pad_ all match.
+  Previously (for the most part) only _path_ (without page number) was
+  being checked in `Record.__eq__`. ([#1105], [#1101])
+
+### Cleanup
+
+- Implement our own `@deprecated` decorator, used to mark functions and methods
+  as being deprecated. Remove dependency on `deprecated` package. ([#1113])
+
+- Remove (direct) dependency on [pytz]. Since the inclusion of the
+  `zoneinfo` module in Python>=3.9 (see [PEP 615]), `pytz` is no long
+  necessary. Recent releases of [Babel][babel-2.12] will work with
+  either `pytz` or `zoneinfo` (depending on what is available) — now
+  we will, too. ([#1110])
+
+### Deprecations
+
+- Deprecate the `Record.contents` property and the use of the
+  `lektor.filecontents.FileContents` class. These are unused by
+  Lektor itself. While they are in use by at least one other project
+  (see [#1026]), the semantics of the `.contents` property is quite
+  unclear when _alts_ are in use. ([#1114])
+
+### Packaging
+
+- Use [hatchling] as our PEP 517 build engine. Among other things, this allows
+  for installing Lektor directly from a git repository — so long as `npm` is installed
+  locally, installing, using `pip` from the git repo will now build the frontend
+  JS and CSS, thus resulting in a working installation of Lektor. ([#1112], [#1081])
+
+### Tests
+
+- Require `tox >= 4.1`.
+
+- Disuse `pytest-cov` — just run `coverage` directly.
+
+### Bit-Rot
+
+- Audit and adjust metadata to ensure that we declare all direct dependencies. ([26e700e])
+
+- Update frontend npm dependencies.
+
+- Fix tox config for tox 4.\*.
+
+[26e700e]: https://github.com/lektor/lektor/commit/26e700e62b3c02a18761cfd7cc7f274ee171dd89
+[6f11bad]: https://github.com/lektor/lektor/commit/6f11bad5844d73c0ba8f5bb74c1e69f6c78650fc
+[edb35f9]: https://github.com/lektor/lektor/commit/edb35f9c1fae1f4e4ae45b51175cdad5e3a52ecd
+[#1114]: https://github.com/lektor/lektor/pull/1114
+[#1113]: https://github.com/lektor/lektor/pull/1113
+[#1112]: https://github.com/lektor/lektor/pull/1112
+[#1108]: https://github.com/lektor/lektor/pull/1108
+[#1106]: https://github.com/lektor/lektor/pull/1106
+[#1105]: https://github.com/lektor/lektor/pull/1105
+[#1102]: https://github.com/lektor/lektor/pull/1102
+[#1101]: https://github.com/lektor/lektor/issues/1101
+[#1100]: https://github.com/lektor/lektor/issues/1100
+[#1081]: https://github.com/lektor/lektor/issues/1081
+[#1065]: https://github.com/lektor/lektor/pull/1065
+[#1028]: https://github.com/lektor/lektor/issues/1028
+[#1026]: https://github.com/lektor/lektor/issues/1026
+[#1007]: https://github.com/lektor/lektor/pull/1007
+[#959]: https://github.com/lektor/lektor/pull/959
+[#865]: https://github.com/lektor/lektor/issues/865
+[babel-2.12]: https://github.com/python-babel/babel/blob/master/CHANGES.rst#version-2120
+[hatchling]: https://pypi.org/project/hatchling/
+[pytz]: https://pypi.org/project/pytz/
+[pep 615]: https://peps.python.org/pep-0615/
+
+## 3.4.0b4 (2022-11-05)
+
+Test under python 3.11. ([#1084][])
+
+### Features
+
+#### Dev Server
+
+- Add live-reloading of pages when they are rebuilt. ([#1027][])
+
+### Bugs
+
+#### Plugins
+
+- `PluginController.emit` would, under certain circumstances, silently
+  ignore `TypeError`s thrown by plugin hook methods. ([#1086][],
+  [#1085][])
+
+[#1027]: https://github.com/lektor/lektor/pull/1027
+[#1084]: https://github.com/lektor/lektor/pull/1084
+[#1085]: https://github.com/lektor/lektor/issues/1085
+[#1086]: https://github.com/lektor/lektor/pull/1086
+
+## 3.4.0b3 (2022-10-19)
+
+### Features
+
+#### Mistune
+
+- When configuring `mistune` plugins (from a Lektor plugin), allow
+  for specifying third-party plugins as a a string in the format
+  `"<module.name>:attr"`. (Plugins which are listed in the
+  `mistune.PLUGINS` map may be listed by their key.) ([#1074][])
+
+### Deprecations
+
+- Remove support for the `--build-flag` option to `lektor build` and
+  `lektor server`. ([#1062][])
+
+### Bugs
+
+- Fix spelling of `typing-inspect` in dependencies. ([#1058][], continued)
+
+#### Mistune
+
+- When using `mistune>=2`, enable the `url`, `strikethrough`,
+  `footnotes`, and `table` plugins for feature parity with
+  `mistune==0.*`. ([#1074][])
+
+#### Admin Server
+
+- Fix Admin UI tracking of navigation to URLs with anchors or query
+  strings in the preview view. ([#1053][])
+- We now test under `node-current` (currently node 18) and
+  `node-lts/*` (16). Previously we were testing under
+  node 14 and 16. ([#1064][])
+
+#### Bit-Rot
+
+- Disuse `pkg_resources` in favor of `importlib.metadata`. ([#1061][], [#1073][])
+- Update frontend dependencies, including upgrade to React version 18. ([#1063][])
+- Remove pin on transitive dependency `typing-inspect`.
+
+#### Packaging
+
+- Clean up package to remove a bit of cruft from the sdist. ([#1066][])
+
+[#1053]: https://github.com/lektor/lektor/pull/1053
+[#1061]: https://github.com/lektor/lektor/pull/1061
+[#1062]: https://github.com/lektor/lektor/pull/1062
+[#1063]: https://github.com/lektor/lektor/pull/1063
+[#1064]: https://github.com/lektor/lektor/pull/1064
+[#1066]: https://github.com/lektor/lektor/pull/1066
+[#1073]: https://github.com/lektor/lektor/pull/1073
+[#1074]: https://github.com/lektor/lektor/pull/1074
+
+## 3.4.0b2 (2022-08-31)
+
+### Bugs
+
+#### Command Line
+
+- Fix `lektor clean` (broken in [#1048][]). ([#1056][])
+
+#### Bit-Rot
+
+- Pin `typing-inspect` to prevent breakage of `marshmallow_dataclass`.
+  ([#1058][], [lovasoa/marshmallow_dataclass#207][md#207])
+
+[#1056]: https://github.com/lektor/lektor/issues/1056
+[#1058]: https://github.com/lektor/lektor/issues/1058
+[md#207]: https://github.com/lovasoa/marshmallow_dataclass/pull/207
+
+## 3.4.0b1 (2022-08-02)
 
 This release drops support for Python 3.6, which has reached end-of-life in
 December 2021.
 
+### Changes
+
+#### Admin Frontend
+
+- The _save_ hotkey (`<ctl>-s`) now always switches to the _preview_
+  view. Previously, the _save_ hotkey was disabled unless there were
+  changes to be saved. ([#1022][])
+- Boolean checkboxes can now be reverted to the "unset" state by
+  typing _Delete_ or _Backspace_ into them. This is pertinent, e.g.,
+  for the `_hidden` field, where unset mean something different
+  (inherit from parent) than either `false` or `true`. ([#1048][])
+- Add ability to resize textareas. ([#1050][])
+
+#### Markdown
+
+- Links and image URLs in markdown text are now, by default, resolved
+  via the Lektor database. Previously, they were not. Note that this
+  behavior may be customized on a per-datamodel-field basis if one
+  wants to get the old behavior back. ([#992][])
+- Lektor now supports either [mistune][] 2.x or mistune 0.x. The
+  configuration API of mistune 2.x differs significantly from that of
+  mistune 0.x. If you are using a plugin that customizes the markdown
+  rendering, you will likely have to update the plugin to support the
+  newer mistune, or pin mistune to the older version. ([#992][])
+
+#### GitHub Pages Publisher
+
+- Add support for specifying which branch to push to by specifying a
+  `branch` query param on the target URL. ([#978][], [#995][])
+- Add support for force-pushing orphan commits by adding a
+  `preserve_history=no` query param to the target URL. ([#995][])
+
+#### Thumbnailing
+
+- The `crop` parameter of the `Image.thumbnail()` method (long since
+  deprecated) has been removed. ([#551][], [#960][])
+- Implicit thumbnail upscaling has been disabled. ([#551][], [#960][])
+
+### Bugs
+
+#### Admin Server
+
+- Refactor and fix numerous buglets in the admin http server. ([#987][])
+- Fix 404 error for `/admin`. ([#1043][], [#1044][])
+- Fix URL resolution to hidden pages. ([#1048][])
+
+#### Admin Frontend
+
+- Use [esbuild][] rather than webpack/babel to build the admin js code. ([#1012][])
+- Update frontend deps. ([#1025][])
+- Make `size = {small|large}` field option work again. ([#1022][])
+- Handle hotkeys when the preview iframe has the focus. ([#1022][])
+- Fix for spurious page scrolling when typing in textareas. ([#1][],
+  [#1038][], [#1050][])
+
+#### Builder
+
+- The `asseturl` filter was not properly tracking build dependencies
+  resulting in stale hashes in the asset URL if the asset was
+  updated. ([#1020][])
+- Fix so that un-hidden children of hidden parents are built. Fix
+  pruning logic so that artifacts corresponding to hidden pages are
+  pruned. ([#203][], [#1048][])
+
+#### Bit-rot
+
+- Fixes for `click==8.1.3`. ([#1031][], [#1033][])
+- Fixes for `werkzeug>=2.2.0`. ([#1019][], [#1018][], [#1051][])
+- Update npm package minimist. ([#1021][])
+- Remove dependency on the `requests[security]` extra. ([#1036][])
+- Remove `build-system.requires` dependencies on `wheel`, and the
+  `setuptools_scm[toml]` extra. ([#1036][])
+
+#### CI
+
+- Update pre-commit config to use `black==22.3.0` to avoid breakage
+  caused by `click>=8.1.0`. ([#1019][])
+- Update to `pylint=2.13.4`. ([#1025][])
+
+#### Command Line
+
+- Fix exception when `--extra-flag`s are specified. ([#1041][], [#1042][])
+
+#### Packaging
+
+- Declare explicit dependencies on `MarkupSafe` and `pytz`,
+  where were transitively implied but are imported directly
+  by Lektor code. ([#1036][])
+
 ### Refactorings
 
 - Removed unused cruft. ([#1009][])
+
+[mistune]: https://mistune.readthedocs.io/en/latest/
+[esbuild]: https://github.com/evanw/esbuild
+[#1]: https://github.com/lektor/lektor/issues/1
+[#203]: https://github.com/lektor/lektor/issues/203
+[#551]: https://github.com/lektor/lektor/pull/551
+[#960]: https://github.com/lektor/lektor/pull/960
+[#978]: https://github.com/lektor/lektor/issues/978
+[#987]: https://github.com/lektor/lektor/pull/987
+[#992]: https://github.com/lektor/lektor/pull/992
+[#995]: https://github.com/lektor/lektor/pull/995
+[#1009]: https://github.com/lektor/lektor/pull/1009
+[#1012]: https://github.com/lektor/lektor/pull/1012
+[#1018]: https://github.com/lektor/lektor/issues/1018
+[#1019]: https://github.com/lektor/lektor/pull/1019
+[#1020]: https://github.com/lektor/lektor/issues/1020
+[#1021]: https://github.com/lektor/lektor/pull/1021
+[#1022]: https://github.com/lektor/lektor/issues/1022
+[#1025]: https://github.com/lektor/lektor/pull/1025
+[#1031]: https://github.com/lektor/lektor/issues/1031
+[#1033]: https://github.com/lektor/lektor/pull/1033
+[#1036]: https://github.com/lektor/lektor/pull/1036
+[#1038]: https://github.com/lektor/lektor/issues/1038
+[#1041]: https://github.com/lektor/lektor/issues/1041
+[#1042]: https://github.com/lektor/lektor/pull/1042
+[#1043]: https://github.com/lektor/lektor/issues/1043
+[#1044]: https://github.com/lektor/lektor/pull/1044
+[#1048]: https://github.com/lektor/lektor/pull/1048
+[#1050]: https://github.com/lektor/lektor/pull/1050
+[#1051]: https://github.com/lektor/lektor/pull/1051
 
 ## 3.3.2 (2022-03-01)
 
@@ -34,7 +679,7 @@ December 2021.
 
 #### Admin API
 
-- Fix a bug in `make_editor_session` when editing non-existant pages
+- Fix a bug in `make_editor_session` when editing non-existent pages
   with a non-primary alt. ([#964][])
 - Fix the ability to add an initial flowblock to a page. (Broken in 3.3.1.)
 - Refactor API views to move business logic back into the `Tree`
@@ -129,7 +774,7 @@ December 2021.
 ### Bugs Fixed
 
 - Fixed an import cycle which caused in `ImportError` if
-  `lektor.types` was imported before `lektor.environemnt`. [#974][]
+  `lektor.types` was imported before `lektor.environment`. [#974][]
 
 #### Deprecations
 
@@ -386,7 +1031,7 @@ It has been rewritten in Typescript, and updated to use v5 of the Bootstrap CSS 
 
 ### Compatibility
 
-- Restore python 2.7 compatibility. It was broken in leketor 3.2.2. [#951][]
+- Restore python 2.7 compatibility. It was broken in Lektor 3.2.2. [#951][]
 - Pin inifile>=0.4.1 to support python 3.10 [#943][], [#953][]
 
 [#943]: https://github.com/lektor/lektor/issues/943
@@ -484,7 +1129,7 @@ Release date 26th of January, 2019
 Release date 7th of September 2018
 
 - Fix pagination and virtual pathing for alts
-- Fixing deply from local server in Python 3
+- Fixing deploy from local server in Python 3
 - Now passing server_info to publisher from local server, providing better
   support for plugin provided publishers.
 - Added a more full-featured example project.
@@ -502,7 +1147,7 @@ Release date 18th of April 2018
 
 - Better Image dimension detection.
 - Fix backwards compatibility with thumbnail generation.
-- Adding safety check when runnning new build in non-empty dir since that could delete data.
+- Adding safety check when running new build in non-empty dir since that could delete data.
 - Adding command aliases.
 
 ## 3.1.0
@@ -529,7 +1174,7 @@ Release date 29th of January 2018.
 - Thumbnails can now have a defined quality.
 - Moved Windows cache to local appdata.
 - README tweaks.
-- Beter translations.
+- Better translations.
 - Better file tracking in watcher.
 - Upgraded many node dependencies.
 - Upgraded from ES5 to ES6.
@@ -585,7 +1230,7 @@ Released on 11th of April 2016
   up in `children`. The default is that a page is discoverable. Setting it
   to `False` means in practical terms that someone needs to know the URL as
   all collection operations will not return it.
-- Added `for_page` function to pagination that returns the pagiantion for a
+- Added `for_page` function to pagination that returns the pagination for a
   specific page.
 - Make pagination next_page and prev_page be None on the edges.
 - Allow plugins to provide publishers.
@@ -607,7 +1252,7 @@ Released on 11th of April 2016
   rendered output is rendered.
 - Added Dutch translations.
 - Added Record.get_siblings()
-- Added various utilties: build_url, join_path, parse_path
+- Added various utilities: build_url, join_path, parse_path
 - Added support for virtual paths and made pagination work with it.
 - Added support for Query.distinct
 - Add support for pagination url resolving on root URL.
@@ -662,7 +1307,7 @@ Released on 27th of December 2015
   fall back to asset resolving.
 - verbose mode now correctly displays traceback of build failures.
 - Fixed a bug that caused build failures not to be remembered.
-- Fixed a bad EXIF attribute (longitude was misspelt)
+- Fixed a bad EXIF attribute (longitude was misspelled)
 - Use requests for URL fetching instead of urllib. This should fix
   some SSL errors on some Python versions.
 - Parent of page now correctly resolves to the right alt.

@@ -1,9 +1,20 @@
+from __future__ import annotations
+
 import posixpath
+from typing import TYPE_CHECKING
+from urllib.parse import parse_qsl
+from urllib.parse import urlsplit
 from weakref import ref as weakref
 
 from lektor.constants import PRIMARY_ALT
+from lektor.context import ignore_url_unaffecting_dependencies
+from lektor.reporter import reporter
 from lektor.utils import is_path_child_of
 from lektor.utils import join_path
+
+
+if TYPE_CHECKING:
+    from lektor.db import Pad
 
 
 class SourceObject:
@@ -13,7 +24,7 @@ class SourceObject:
     # to be from another place.
     __module__ = "db"
 
-    def __init__(self, pad):
+    def __init__(self, pad: Pad):
         self._pad = weakref(pad)
 
     @property
@@ -23,7 +34,13 @@ class SourceObject:
 
     @property
     def source_filename(self):
-        """The primary source filename of this source object."""
+        """The primary source filename of this source object.
+
+        In general, subclasses should implement/override ``iter_source_filenames``
+        rather than this property.
+        """
+        source_filenames = self.iter_source_filenames()
+        return next(iter(source_filenames), None)
 
     is_hidden = False
     is_discoverable = True
@@ -39,13 +56,12 @@ class SourceObject:
         return not self.is_discoverable
 
     def iter_source_filenames(self):
-        fn = self.source_filename
-        if fn is not None:
-            yield self.source_filename
+        """An iterable of the source filenames for this source object.
 
-    def iter_virtual_sources(self):
+        The first returned filename should be the "primary" one.
+        """
         # pylint: disable=no-self-use
-        return []
+        return ()
 
     @property
     def url_path(self):
@@ -61,7 +77,7 @@ class SourceObject:
         return None
 
     @property
-    def pad(self):
+    def pad(self) -> Pad:
         """The associated pad of this source object."""
         rv = self._pad()
         if rv is not None:
@@ -87,7 +103,17 @@ class SourceObject:
             return False
         return is_path_child_of(self.path, path, strict=strict)
 
-    def url_to(self, path, alt=None, absolute=None, external=None, base_url=None):
+    def url_to(
+        self,
+        path,  # : Union[str, "SourceObject", "SupportsUrlPath"]
+        *,
+        alt: str | None = None,
+        absolute: bool | None = None,
+        external: bool | None = None,
+        base_url: str | None = None,
+        resolve: bool | None = None,
+        strict_resolve: bool | None = None,
+    ) -> str:
         """Calculates the URL from the current source object to the given
         other source object.  Alternatively a path can also be provided
         instead of a source object.  If the path starts with a leading
@@ -95,48 +121,170 @@ class SourceObject:
 
         If a `base_url` is provided then it's used instead of the URL of
         the record itself.
+
+        If path is a string and resolve=False is passed, then no attempt is
+        made to resolve the path to a Lektor source object.
+
+        If path is a string and strict_resolve=True is passed, then an exception
+        is raised if the path can not be resolved to a Lektor source object.
+
+        API CHANGE: It used to be (lektor <= 3.3.1) that if absolute was true-ish,
+        then a url_path (URL path relative to the site's ``base_path`` was returned.
+        This is changed so that now an absolute URL path is returned.
         """
-        if alt is None:
-            alt = getattr(path, "alt", None)
-            if alt is None:
-                alt = self.alt
-
-        resolve = True
-        path = getattr(path, "url_path", path)
-        if path[:1] == "!":
-            resolve = False
-            path = path[1:]
-
-        if resolve:
-            if not path.startswith("/"):
-                if self.path is None:
-                    raise RuntimeError(
-                        "Cannot use relative URL generation "
-                        "from sources that do not have a "
-                        "path.  The source object without "
-                        "a path is %r" % self
-                    )
-                path = join_path(self.path, path)
-            source = self.pad.get(path, alt=alt)
-            if source is not None:
-                path = source.url_path
-        else:
-            path = posixpath.join(self.url_path, path)
-
-        if absolute:
-            return path
         if base_url is None:
             base_url = self.url_path
-        return self.pad.make_url(path, base_url, absolute, external)
+        if absolute:
+            # This sort of reproduces the old behaviour, where when
+            # ``absolute`` was trueish, the "absolute" URL path
+            # (relative to config.base_path) was returned, regardless
+            # of the value of ``external``.
+            external = False
+        if resolve is None and strict_resolve:
+            resolve = True
+
+        if isinstance(path, SourceObject):
+            # assert not isinstance(path, Asset)
+            target = path
+            if alt is not None and alt != target.alt:
+                # NB: path.path includes page_num
+                alt_target = self.pad.get(path.path, alt=alt, persist=False)
+                if alt_target is not None:
+                    target = alt_target
+                # FIXME: issue warning or fail if cannot get correct alt?
+            url_path = target.url_path
+        elif hasattr(path, "url_path"):  # e.g. Thumbnail
+            assert path.url_path.startswith("/")
+            url_path = path.url_path
+        elif path[:1] == "!":
+            # XXX: error if used with explicit alt?
+            if resolve:
+                raise RuntimeError("Resolve=True is incompatible with '!' prefix.")
+            url_path = _join_url_path(self, path[1:])
+        elif resolve is not None and not resolve:
+            # XXX: error if used with explicit alt?
+            url_path = _join_url_path(self, path)
+        else:
+            with ignore_url_unaffecting_dependencies():
+                return self._resolve_url(
+                    path,
+                    alt=alt,
+                    absolute=absolute,
+                    external=external,
+                    base_url=base_url,
+                    strict=strict_resolve,
+                )
+
+        return self.pad.make_url(url_path, base_url, absolute, external)
+
+    def _resolve_url(
+        self,
+        _url: str,
+        alt: str | None,
+        absolute: bool | None,
+        external: bool | None,
+        base_url: str | None,
+        strict: bool | None,
+    ) -> str:
+        """Resolve (possibly relative) URL or db path to URL."""
+        url = urlsplit(_url)
+        if url.scheme or url.netloc:
+            resolved = url
+        else:
+            # Interpret path as (possibly relative) db-path
+            dbpath = join_path(self.path, url.path)
+            params = dict(parse_qsl(url.query, keep_blank_values=False))
+            query_alt = params.get("alt")
+            # XXX: support page_num in query, too?
+            if not alt:
+                alt = query_alt or self.alt
+            elif query_alt and query_alt != alt:
+                raise RuntimeError("Conflicting values for alt.")
+            target = self.pad.get(dbpath, alt=alt)
+            if target is not None:
+                url_path = target.url_path
+                query = ""
+            elif strict:
+                raise RuntimeError(f"Can not resolve link {_url!r}")
+            else:
+                # Fall back to interpreting path as (possibly relative) URL path
+                url_path = _join_url_path(self, url.path)
+                query = url.query
+
+            result = self.pad.make_url(
+                url_path, absolute=absolute, external=external, base_url=base_url
+            )
+            resolved = urlsplit(result)._replace(query=query, fragment=url.fragment)
+        return resolved.geturl()
+
+    @property
+    def url_content_path(self):
+        """URL path to the directory that contains children of this source object.
+
+        For container types, the record's ``url_content_path`` is often
+        the same as its ``url_path``. The exception to this is when
+        the page's slug contains a dot (".").
+        See https://www.getlektor.com/docs/content/urls/#content-below-dotted-slugs
+
+        The ``url_content_path`` should be ``None`` for attachments and other
+        SourceObject types that can not contain child source objects.
+        """
+        return None
 
 
-class VirtualSourceObject(SourceObject):
+def _join_url_path(source, path):
+    """Join possibly relative url path relative to source.url_content_path."""
+    if posixpath.isabs(path):
+        return path
+    content_path = source.url_content_path
+    if content_path is None:
+        # Source is not a container type (e.g. it is an attachment).
+        # Punt and treat path as relative to the source's containing directory.
+        content_path = posixpath.dirname(source.url_path) or "/"
+        reporter.report_generic(
+            f"Suspicious use of relative URL {path!r} "
+            f"from non-container source {source!r}"
+        )
+    return posixpath.join(content_path, path)
+
+
+class DBSourceObject(SourceObject):
+    """This is the base class for objects that live in the lektor db.
+
+    I.e. this is the type of object returned by pad.get().
+
+    """
+
+    @property
+    def path(self):
+        """Return the full database path to the source object.
+
+        All DBSourceObjects must have paths.
+        """
+        raise NotImplementedError()
+
+    # XXX: move SourceObject.url_to here?
+
+    def __eq__(self, other):
+        if other is self:
+            return True  # optimization
+        if other.__class__ is not self.__class__:
+            return False  # optimization
+        return (
+            other.alt == self.alt and other.path == self.path and other.pad == self.pad
+        )
+
+    def __hash__(self):
+        return hash((self.path, self.alt))
+
+
+class VirtualSourceObject(DBSourceObject):
     """Virtual source objects live below a parent record but do not
     originate from the source tree with a separate file.
     """
 
     def __init__(self, record):
-        SourceObject.__init__(self, record.pad)
+        super().__init__(record.pad)
         self.record = record
 
     @property
@@ -159,9 +307,9 @@ class VirtualSourceObject(SourceObject):
     def alt(self):
         return self.record.alt
 
-    @property
-    def source_filename(self):
-        return self.record.source_filename
-
-    def iter_virtual_sources(self):
-        yield self
+    def iter_source_filenames(self):
+        # This is a default.  However, if artifacts produced from a
+        # particular virtual source type do not explicitly vary with
+        # the parent record, it may make sense to override this to
+        # return an empty (or some other) list of file names.
+        return self.record.iter_source_filenames()

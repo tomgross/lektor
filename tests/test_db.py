@@ -2,7 +2,6 @@ import inspect
 import os
 import re
 from datetime import date
-from pathlib import Path
 
 import pytest
 
@@ -13,6 +12,8 @@ from lektor.db import get_alts
 from lektor.db import Image
 from lektor.db import Query
 from lektor.db import Video
+from lektor.filecontents import FileContents
+from lektor.metaformat import serialize
 
 
 def test_root(pad):
@@ -79,6 +80,43 @@ def test_url_matching_with_customized_slug_in_alt(pad):
     assert get_alts(en) == ["en", "de"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/extra/container/a",  # child of hidden page explicit marked as non-hidden
+        "/extra/container/hello.txt",  # attachment of hidden page
+        "/#fragment",  # fragment should be ignored
+        "/?query",  # query should be ignored
+        "http:/",  # http scheme should be ignored
+        "https:/",  # https scheme should be ignored
+    ],
+)
+def test_resolve_url(pad, path):
+    assert pad.resolve_url_path(path) is not None
+
+
+def test_resolve_url_hidden_page(pad):
+    assert pad.resolve_url_path("/extra/container") is None
+    assert pad.resolve_url_path("/extra/container", include_invisible=True) is not None
+
+
+def test_resolve_url_asset(pad):
+    assert pad.resolve_url_path("/static/demo.css") is not None
+    assert pad.resolve_url_path("/static/demo.css", include_assets=False) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ftp:///",  # bad scheme
+        "//localhost/",  # path should not have a netloc
+    ],
+)
+def test_resolve_url_invalid_path(pad, path):
+    assert pad.resolve_url_path(path) is None
+
+
 def test_basic_alts(pad):
     with Context(pad=pad):
         assert get_alts() == ["en", "de"]
@@ -138,7 +176,7 @@ def test_undiscoverable_basics(pad):
 
     q = secret.children
     assert q._include_undiscoverable is False
-    assert q._include_hidden is None
+    assert q._include_hidden is False
     q = q.include_undiscoverable(True)
     assert q._include_undiscoverable is True
     assert q._include_hidden is False
@@ -149,7 +187,6 @@ def test_undiscoverable_basics(pad):
 
 
 def test_attachment_api(pad):
-
     root = pad.root
     root_attachments = [
         "hello.txt",
@@ -201,15 +238,15 @@ def test_distinct(pad):
     posts = pad.query("blog")
     distinct_categories = posts.distinct("category")
     assert isinstance(distinct_categories, set)
-    assert distinct_categories == set(["My Category"])
+    assert distinct_categories == {"My Category"}
     distinct_tags = posts.distinct("tags")
     assert isinstance(distinct_tags, set)
-    assert distinct_tags == set(["tag1", "tag2", "tag3"])
+    assert distinct_tags == {"tag1", "tag2", "tag3"}
     distinct_pub_dates = posts.distinct("pub_date")
-    assert distinct_pub_dates == set([date(2015, 12, 12), date(2015, 12, 13)])
+    assert distinct_pub_dates == {date(2015, 12, 12), date(2015, 12, 13)}
     assert posts.distinct("foo") == set()
     # Post 2 has no summary; check we don't include Undefined in distinct().
-    assert posts.distinct("summary") == set(["hello"])
+    assert posts.distinct("summary") == {"hello"}
 
 
 def test_root_pagination(scratch_project, scratch_env):
@@ -234,13 +271,7 @@ def test_root_pagination(scratch_project, scratch_env):
         with open(
             os.path.join(base, "content", name, "contents.lr"), "w", encoding="utf-8"
         ) as f:
-            f.write(
-                "_model: page\n"
-                "---\n"
-                "title: Page %s\n"
-                "---\n"
-                "body: Hello World!\n" % name
-            )
+            f.write(f"_model: page\n---\ntitle: Page {name}\n---\nbody: Hello World!\n")
 
     scratch_pad = Database(scratch_env).new_pad()
 
@@ -267,7 +298,7 @@ def test_undefined_order(pad):
                 (2, "2016-01-02"),
             ]:
                 yield pad.instance_from_data(
-                    {"_id": str(day), "_path": "test/%s" % day, "pub_date": pub_date},
+                    {"_id": str(day), "_path": f"test/{day}", "pub_date": pub_date},
                     datamodel=blog_post,
                 )
 
@@ -314,7 +345,7 @@ def test_default_order_by(scratch_project, scratch_env):
     with open(
         os.path.join(tree, "content", "myobj", "contents.lr"), "w", encoding="utf-8"
     ) as f:
-        f.write("_model: mymodel\n" "---\n" "title: My Test Object\n")
+        f.write("_model: mymodel\n---\ntitle: My Test Object\n")
 
     pad = Database(scratch_env).new_pad()
     myobj = pad.get("/myobj")
@@ -355,7 +386,7 @@ def write_files(*path_text_pairs):
 
 @pytest.fixture
 def dotted_slug_test_records(scratch_project_data):
-    content_path = Path(scratch_project_data, "content")
+    content_path = scratch_project_data / "content"
     write_files(
         (
             content_path / "test_dotted/contents.lr",
@@ -376,14 +407,14 @@ def dotted_slug_test_records(scratch_project_data):
 
 @pytest.fixture
 def primary_alt_is_prefixed(scratch_project_data):
-    project_file = Path(scratch_project_data, "Scratch.lektorproject")
+    project_file = scratch_project_data / "Scratch.lektorproject"
     content = project_file.read_text(encoding="utf-8")
     write_files(
         (
             project_file,
             content.replace(
                 "[alternatives.en]\n",
-                ("[alternatives.en]\n" "url_prefix = /en/\n"),
+                ("[alternatives.en]\nurl_prefix = /en/\n"),
             ),
         )
     )
@@ -391,10 +422,9 @@ def primary_alt_is_prefixed(scratch_project_data):
 
 @pytest.fixture
 def paginated_pages(scratch_project_data):
-    project_path = Path(scratch_project_data)
     write_files(
         (
-            project_path / "content/paginated/contents.lr",
+            scratch_project_data / "content/paginated/contents.lr",
             """
             _model: paginated
             ---
@@ -402,7 +432,7 @@ def paginated_pages(scratch_project_data):
             """,
         ),
         (
-            project_path / "content/paginated.dotted/contents.lr",
+            scratch_project_data / "content/paginated.dotted/contents.lr",
             """
             _model: paginated
             ---
@@ -410,7 +440,7 @@ def paginated_pages(scratch_project_data):
             """,
         ),
         (
-            project_path / "models/paginated.ini",
+            scratch_project_data / "models/paginated.ini",
             """
             [model]
             name = Paginated
@@ -425,7 +455,7 @@ def paginated_pages(scratch_project_data):
 
 @pytest.fixture
 def dummy_attachment(scratch_project_data):
-    attachment = Path(scratch_project_data, "content/test.txt")
+    attachment = scratch_project_data / "content/test.txt"
     write_files((attachment, "some text"))
 
 
@@ -475,7 +505,7 @@ def test_Page_url_path_is_for_primary_alt(scratch_pad):
 def test_Page_url_path_raise_error_if_paginated_and_dotted(scratch_pad):
     page = scratch_pad.get("/paginated.dotted")
     with pytest.raises(Exception) as exc_info:
-        page.url_path  # pylint: disable=pointless-statement
+        _ = page.url_path
     assert re.match(
         r"(?=.*\bextension\b)(?=.*\bpagination\b).*\bcannot be used",
         str(exc_info.value),
@@ -487,3 +517,68 @@ def test_Page_url_path_raise_error_if_paginated_and_dotted(scratch_pad):
 def test_Attachment_url_path_is_for_primary_alt(scratch_pad, alt):
     attachment = scratch_pad.get("/test.txt")
     assert attachment.url_path == "/en/test.txt"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",  # Page
+        "hello.txt",  # Attachment
+    ],
+)
+def test_Record_contents_is_deprecated(pad, path):
+    with pytest.deprecated_call(match=r"contents") as warnings:
+        assert isinstance(pad.get(path).contents, FileContents)
+    assert all(w.filename == __file__ for w in warnings)
+
+
+@pytest.mark.parametrize(
+    "url, base_url, absolute, external, project_url, expected",
+    [
+        ("/a/b.html", "/a/", None, None, None, "b.html"),
+        ("/a/b/", "/a/", None, None, None, "b/"),
+        ("/a/b/", "/a", None, None, None, "a/b/"),
+        ("/a/b/", "/a", True, None, None, "/a/b/"),
+        ("/a/b/", "/a", True, None, "https://example.net/pfx/", "/pfx/a/b/"),
+        ("/a/b/", "/a", None, True, "https://example.org", "https://example.org/a/b/"),
+    ],
+)
+def test_Pad_make_url(url, base_url, absolute, external, project_url, expected, pad):
+    if project_url is not None:
+        pad.db.config.values["PROJECT"]["url"] = project_url
+    assert pad.make_url(url, base_url, absolute, external) == expected
+
+
+def test_Pad_make_url_raises_runtime_error_if_no_project_url(pad):
+    with pytest.raises(RuntimeError, match="(?i)configure the url in the project"):
+        pad.make_url("/a/b", external=True)
+
+
+def test_Pad_make_url_raises_runtime_error_if_no_base_url(pad):
+    with pytest.raises(RuntimeError, match="(?i)no base url"):
+        pad.make_url("/a/b")
+
+
+def test_Query_include_hidden_and_undiscoverable(scratch_project_data, scratch_pad):
+    def make_child(name, data):
+        contents_lr = scratch_project_data / "content" / name / "contents.lr"
+        contents_lr.parent.mkdir()
+        contents_lr.write_text("".join(serialize(data.items())))
+
+    make_child("hidden", {"_hidden": "yes"})
+    make_child("undiscoverable", {"_discoverable": "no"})
+    make_child("hidden-undiscoverable", {"_hidden": "yes", "_discoverable": "no"})
+
+    children = scratch_pad.root.children
+
+    def paths(query: Query) -> set:
+        return {child.path for child in query}
+
+    assert paths(children) == set()
+    assert paths(children.include_hidden(True)) == {"/hidden"}
+    assert paths(children.include_undiscoverable(True)) == {"/undiscoverable"}
+    assert paths(children.include_hidden(True).include_undiscoverable(True)) == {
+        "/hidden",
+        "/undiscoverable",
+        "/hidden-undiscoverable",
+    }

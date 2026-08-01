@@ -9,7 +9,7 @@ export default function DeleteAllAltsChoice({
   deleteMasterRecord: boolean;
   setDeleteMasterRecord: (v: boolean) => void;
   isAttachment: boolean;
-}): JSX.Element {
+}): React.JSX.Element {
   return (
     <>
       <p>{trans("DELETE_PRIMARY_ALT_INFO")}</p>
@@ -19,12 +19,14 @@ export default function DeleteAllAltsChoice({
             <input
               type="radio"
               checked={deleteMasterRecord}
-              onChange={() => setDeleteMasterRecord(true)}
+              onChange={() => {
+                setDeleteMasterRecord(true);
+              }}
             />{" "}
             {trans(
               isAttachment
                 ? "DELETE_ALL_ATTACHMENT_ALTS"
-                : "DELETE_ALL_PAGE_ALTS"
+                : "DELETE_ALL_PAGE_ALTS",
             )}
           </label>
         </li>
@@ -33,12 +35,14 @@ export default function DeleteAllAltsChoice({
             <input
               type="radio"
               checked={!deleteMasterRecord}
-              onChange={() => setDeleteMasterRecord(false)}
+              onChange={() => {
+                setDeleteMasterRecord(false);
+              }}
             />{" "}
             {trans(
               isAttachment
                 ? "DELETE_ONLY_PRIMARY_ATTACHMENT_ALT"
-                : "DELETE_ONLY_PRIMARY_PAGE_ALT"
+                : "DELETE_ONLY_PRIMARY_PAGE_ALT",
             )}
           </label>
         </li>

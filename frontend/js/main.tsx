@@ -1,18 +1,23 @@
-import React, { useMemo } from "react";
-import ReactDOM from "react-dom";
+import React, { StrictMode, useMemo } from "react";
+import { createRoot } from "react-dom/client";
+import { RouterProvider } from "react-router/dom";
 import {
-  BrowserRouter,
-  Redirect,
+  Navigate,
+  createBrowserRouter,
   useLocation,
-  useRouteMatch,
-} from "react-router-dom";
+  useMatch,
+} from "react-router";
 import { setCurrentLanguage } from "./i18n";
 import { RecordContext, RecordPathDetails } from "./context/record-context";
 
 import App from "./views/App";
 import { adminPath } from "./components/use-go-to-admin-page";
 
+/** Fonts */
 import "font-awesome/css/font-awesome.css";
+import "@fontsource/roboto-slab/400.css";
+import "@fontsource/roboto-slab/700.css";
+
 import "../scss/main.scss";
 import { PageContext, PageName, isPageName } from "./context/page-context";
 import { trimSlashes } from "./utils";
@@ -37,10 +42,9 @@ function Page({ page }: { page: PageName }) {
 }
 
 function Main() {
-  const root = $LEKTOR_CONFIG.admin_root;
-  const page = useRouteMatch<{ page: string }>(`${root}/:page`)?.params.page;
+  const page = useMatch(":page")?.params.page;
   if (!isPageName(page)) {
-    return <Redirect to={adminPath("edit", "/", "_primary")} />;
+    return <Navigate to={adminPath("edit", "/", "_primary")} />;
   }
   return <Page page={page} />;
 }
@@ -48,10 +52,27 @@ function Main() {
 const dash = document.getElementById("dash");
 if (dash) {
   setCurrentLanguage($LEKTOR_CONFIG.lang);
-  ReactDOM.render(
-    <BrowserRouter>
-      <Main />
-    </BrowserRouter>,
-    dash
+
+  const root = createRoot(dash);
+  const router = createBrowserRouter(
+    [
+      {
+        path: "/",
+        element: <Navigate to={adminPath("edit", "/", "_primary")} />,
+      },
+      {
+        path: "/:page",
+        element: <Main />,
+      },
+    ],
+    {
+      basename: $LEKTOR_CONFIG.admin_root,
+    },
   );
+
+  let app = <RouterProvider router={router} />;
+  if (process.env.NODE_ENV !== "production") {
+    app = <StrictMode>{app}</StrictMode>;
+  }
+  root.render(app);
 }

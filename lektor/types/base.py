@@ -27,8 +27,8 @@ class RawValue:
 
     def _get_hint(self, prefix, reason):
         if self.field is not None:
-            return "%s in field '%s': %s" % (prefix, self.field.name, reason)
-        return "%s: %s" % (prefix, reason)
+            return f"{prefix} in field '{self.field.name}': {reason}"
+        return f"{prefix}: {reason}"
 
     def bad_value(self, reason):
         return BadValue(hint=self._get_hint("Bad value", reason), obj=self.value)
@@ -40,8 +40,7 @@ class RawValue:
 class _NameDescriptor:
     def __get__(self, obj, type):
         rv = type.__name__
-        if rv.endswith("Type"):
-            rv = rv[:-4]
+        rv = rv.removesuffix("Type")
         return rv.lower()
 
 
@@ -90,4 +89,4 @@ class Type:
         return value
 
     def __repr__(self):
-        return "%s()" % self.__class__.__name__
+        return f"{self.__class__.__name__}()"

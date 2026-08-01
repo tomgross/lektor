@@ -2,9 +2,12 @@ import React, { useEffect, useState } from "react";
 import { get } from "../fetch";
 import { trans } from "../i18n";
 
-type State = { serverIsUp: boolean; projectId: string | null };
+interface State {
+  serverIsUp: boolean;
+  projectId: string | null;
+}
 
-export default function ServerStatus(): JSX.Element | null {
+export default function ServerStatus(): React.JSX.Element | null {
   const [state, setState] = useState<State>({
     serverIsUp: true,
     projectId: null,
@@ -17,16 +20,18 @@ export default function ServerStatus(): JSX.Element | null {
           setState(({ projectId }) =>
             projectId === null
               ? { projectId: project_id, serverIsUp: true }
-              : { projectId, serverIsUp: projectId === project_id }
+              : { projectId, serverIsUp: projectId === project_id },
           );
         },
         () => {
           setState((s) => ({ ...s, serverIsUp: false }));
-        }
+        },
       );
     };
     const id = window.setInterval(onInterval, 2000);
-    return () => window.clearInterval(id);
+    return () => {
+      window.clearInterval(id);
+    };
   }, []);
 
   if (state.serverIsUp) {

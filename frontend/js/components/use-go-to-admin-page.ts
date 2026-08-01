@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { PageName } from "../context/page-context";
 import { RecordAlternative, RecordPath } from "../context/record-context";
 
@@ -13,13 +13,13 @@ import { RecordAlternative, RecordPath } from "../context/record-context";
 export function adminPath(
   page: PageName,
   path: RecordPath,
-  alt: RecordAlternative
+  alt: RecordAlternative,
 ): string {
   const params = new URLSearchParams({ path });
   if (alt !== "_primary") {
     params.set("alt", alt);
   }
-  return `${$LEKTOR_CONFIG.admin_root}/${page}?${params}`;
+  return `/${page}?${params.toString()}`;
 }
 
 /**
@@ -28,12 +28,13 @@ export function adminPath(
  *          and page fs path and alt.
  */
 export function useGoToAdminPage() {
-  const history = useHistory();
+  const navigate = useNavigate();
 
   return useCallback(
     (name: PageName, path: RecordPath, alt: RecordAlternative) => {
-      history.push(adminPath(name, path, alt));
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
+      navigate(adminPath(name, path, alt));
     },
-    [history]
+    [navigate],
   );
 }

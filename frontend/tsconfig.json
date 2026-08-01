@@ -1,16 +1,18 @@
 {
-  "include": ["js/**/*"],
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "include": ["build.ts", "eslint.config.mjs", "js/**/*"],
   "compilerOptions": {
-    "target": "es5",
-    "module": "commonjs",
-    "allowJs": true,
-    "checkJs": true,
+    "target": "es2018",
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "jsx": "react",
     "noEmit": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
     "forceConsistentCasingInFileNames": true,
+    "noUncheckedSideEffectImports": false,
     "resolveJsonModule": true
   }
 }

@@ -19,6 +19,7 @@ from lektor.utils import slugify
 class ChildConfig:
     def __init__(
         self,
+        *,
         enabled=None,
         slug_format=None,
         model=None,
@@ -47,7 +48,9 @@ class ChildConfig:
 
 
 class PaginationConfig:
-    def __init__(self, env, enabled=None, per_page=None, url_suffix=None, items=None):
+    def __init__(
+        self, env, *, enabled=None, per_page=None, url_suffix=None, items=None
+    ):
         self.env = env
         if enabled is None:
             enabled = False
@@ -153,7 +156,7 @@ class PaginationConfig:
 
 
 class AttachmentConfig:
-    def __init__(self, enabled=None, model=None, order_by=None, hidden=None):
+    def __init__(self, *, enabled=None, model=None, order_by=None, hidden=None):
         if enabled is None:
             enabled = True
         if hidden is None:
@@ -216,18 +219,13 @@ class Field:
         return self.type.value_to_raw(value)
 
     def __repr__(self):
-        return "<%s %r type=%r>" % (
-            self.__class__.__name__,
-            self.name,
-            self.type,
-        )
+        return f"<{self.__class__.__name__} {self.name!r} type={self.type!r}>"
 
 
 def _iter_all_fields(obj):
     for name in sorted(x for x in obj.field_map if x[:1] == "_"):
         yield obj.field_map[name]
-    for field in obj.fields:
-        yield field
+    yield from obj.fields
 
 
 class DataModel:
@@ -236,6 +234,7 @@ class DataModel:
         env,
         id,
         name_i18n,
+        *,
         label_i18n=None,
         filename=None,
         hidden=None,
@@ -278,7 +277,7 @@ class DataModel:
         # This is a mapping of the key names to the actual field which
         # also includes the system fields.  This is primarily used for
         # fast internal operations but also the admin.
-        self.field_map = dict((x.name, x) for x in fields)
+        self.field_map = {x.name: x for x in fields}
         for key, (ty, opts) in system_fields.items():
             self.field_map[key] = Field(env, name=key, type=ty, options=opts)
 
@@ -348,7 +347,7 @@ class DataModel:
                 self._child_slug_tmpl[1].evaluate(pad, this=data).strip().split()
             ).strip("/")
         except Exception as exc:
-            reporter.report_generic("Failed to expand child slug_format: %s" % exc)
+            reporter.report_generic(f"Failed to expand child slug_format: {exc}")
             return "temp-" + slugify(data["_id"])
 
     def get_default_template_name(self):
@@ -390,10 +389,7 @@ class DataModel:
         return rv
 
     def __repr__(self):
-        return "<%s %r>" % (
-            self.__class__.__name__,
-            self.id,
-        )
+        return f"<{self.__class__.__name__} {self.id!r}>"
 
 
 class FlowBlockModel:
@@ -402,6 +398,7 @@ class FlowBlockModel:
         env,
         id,
         name_i18n,
+        *,
         filename=None,
         fields=None,
         order=None,
@@ -419,7 +416,7 @@ class FlowBlockModel:
         self.order = order
         self.button_label = button_label
 
-        self.field_map = dict((x.name, x) for x in fields)
+        self.field_map = {x.name: x for x in fields}
         self.field_map["_flowblock"] = Field(
             env, name="_flowblock", type=env.types["string"]
         )
@@ -452,10 +449,7 @@ class FlowBlockModel:
         return rv
 
     def __repr__(self):
-        return "<%s %r>" % (
-            self.__class__.__name__,
-            self.id,
-        )
+        return f"<{self.__class__.__name__} {self.id!r}>"
 
 
 def fielddata_from_ini(inifile):
@@ -476,48 +470,48 @@ def datamodel_data_from_ini(id, inifile):
             return None
         return [x for x in [x.strip() for x in value.strip().split(",")] if x]
 
-    return dict(
-        filename=inifile.filename,
-        id=id,
-        parent=inifile.get("model.inherits"),
-        name_i18n=get_i18n_block(inifile, "model.name"),
-        label_i18n=get_i18n_block(inifile, "model.label"),
-        primary_field=inifile.get("model.primary_field"),
-        hidden=inifile.get_bool("model.hidden", default=None),
-        protected=inifile.get_bool("model.protected", default=None),
-        child_config=dict(
-            enabled=inifile.get_bool("children.enabled", default=None),
-            slug_format=inifile.get("children.slug_format"),
-            model=inifile.get("children.model"),
-            order_by=_parse_order(inifile.get("children.order_by")),
-            replaced_with=inifile.get("children.replaced_with"),
-            hidden=inifile.get_bool("children.hidden", default=None),
-        ),
-        attachment_config=dict(
-            enabled=inifile.get_bool("attachments.enabled", default=None),
-            model=inifile.get("attachments.model"),
-            order_by=_parse_order(inifile.get("attachments.order_by")),
-            hidden=inifile.get_bool("attachments.hidden", default=None),
-        ),
-        pagination_config=dict(
-            enabled=inifile.get_bool("pagination.enabled", default=None),
-            per_page=inifile.get_int("pagination.per_page"),
-            url_suffix=inifile.get("pagination.url_suffix"),
-            items=inifile.get("pagination.items"),
-        ),
-        fields=fielddata_from_ini(inifile),
-    )
+    return {
+        "filename": inifile.filename,
+        "id": id,
+        "parent": inifile.get("model.inherits"),
+        "name_i18n": get_i18n_block(inifile, "model.name"),
+        "label_i18n": get_i18n_block(inifile, "model.label"),
+        "primary_field": inifile.get("model.primary_field"),
+        "hidden": inifile.get_bool("model.hidden", default=None),
+        "protected": inifile.get_bool("model.protected", default=None),
+        "child_config": {
+            "enabled": inifile.get_bool("children.enabled", default=None),
+            "slug_format": inifile.get("children.slug_format"),
+            "model": inifile.get("children.model"),
+            "order_by": _parse_order(inifile.get("children.order_by")),
+            "replaced_with": inifile.get("children.replaced_with"),
+            "hidden": inifile.get_bool("children.hidden", default=None),
+        },
+        "attachment_config": {
+            "enabled": inifile.get_bool("attachments.enabled", default=None),
+            "model": inifile.get("attachments.model"),
+            "order_by": _parse_order(inifile.get("attachments.order_by")),
+            "hidden": inifile.get_bool("attachments.hidden", default=None),
+        },
+        "pagination_config": {
+            "enabled": inifile.get_bool("pagination.enabled", default=None),
+            "per_page": inifile.get_int("pagination.per_page"),
+            "url_suffix": inifile.get("pagination.url_suffix"),
+            "items": inifile.get("pagination.items"),
+        },
+        "fields": fielddata_from_ini(inifile),
+    }
 
 
 def flowblock_data_from_ini(id, inifile):
-    return dict(
-        filename=inifile.filename,
-        id=id,
-        name_i18n=get_i18n_block(inifile, "block.name"),
-        fields=fielddata_from_ini(inifile),
-        order=inifile.get_int("block.order"),
-        button_label=inifile.get("block.button_label"),
-    )
+    return {
+        "filename": inifile.filename,
+        "id": id,
+        "name_i18n": get_i18n_block(inifile, "block.name"),
+        "fields": fielddata_from_ini(inifile),
+        "order": inifile.get_int("block.order"),
+        "button_label": inifile.get("block.button_label"),
+    }
 
 
 def fields_from_data(env, data, parent_fields=None):
@@ -530,10 +524,9 @@ def fields_from_data(env, data, parent_fields=None):
         known_fields.add(name)
 
     if parent_fields is not None:
-        prepended_fields = []
-        for field in parent_fields:
-            if field.name not in known_fields:
-                prepended_fields.append(field)
+        prepended_fields = [
+            field for field in parent_fields if field.name not in known_fields
+        ]
         fields = prepended_fields + fields
 
     return fields
@@ -648,7 +641,7 @@ def load_datamodels(env):
     def create_model(model_id):
         model_data = data.get(model_id)
         if model_data is None:
-            raise RuntimeError("Model %r not found" % model_id)
+            raise RuntimeError(f"Model {model_id!r} not found")
 
         if model_data["parent"] is not None:
             parent = get_model(model_data["parent"])

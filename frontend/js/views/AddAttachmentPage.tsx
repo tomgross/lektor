@@ -11,12 +11,12 @@ import { trans, trans_format } from "../i18n";
 import { showErrorDialog } from "../error-dialog";
 import { dispatch } from "../events";
 
-type NewAttachmentInfo = {
+interface NewAttachmentInfo {
   label: string;
   can_upload: boolean;
-};
+}
 
-function AddAttachmentPage(): JSX.Element | null {
+function AddAttachmentPage(): React.JSX.Element | null {
   const path = useRecordPath();
   const [newAttachmentInfo, setNewAttachmentInfo] =
     useState<NewAttachmentInfo | null>(null);
@@ -44,7 +44,8 @@ function AddAttachmentPage(): JSX.Element | null {
         return;
       }
 
-      const files = Array.prototype.slice.call(target.files, 0);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const files: File[] = Array.prototype.slice.call(target.files, 0);
       setCurrentFiles(files);
       setIsUploading(true);
 
@@ -66,7 +67,7 @@ function AddAttachmentPage(): JSX.Element | null {
       };
       xhr.send(formData);
     },
-    [path, isUploading]
+    [path, isUploading],
   );
 
   if (!newAttachmentInfo) {

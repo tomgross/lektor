@@ -83,7 +83,7 @@ function Publish({
 }: {
   dismiss: () => void;
   preventNavigation: (b: boolean) => void;
-}): JSX.Element {
+}): React.JSX.Element {
   const [servers, setServers] = useState<Server[]>([]);
   const [activeTarget, setActiveTarget] = useState("");
   const [log, setLog] = useState<string[]>([]);
@@ -104,10 +104,11 @@ function Publish({
       setState("PUBLISH");
 
       const eventSource = new EventSource(
-        apiUrl("/publish", { server: activeTarget })
+        apiUrl("/publish", { server: activeTarget }),
       );
-      eventSource.addEventListener("message", (event) => {
-        const data = JSON.parse(event.data);
+      eventSource.addEventListener("message", (event: MessageEvent<string>) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const data: { msg: string } = JSON.parse(event.data);
         if (data === null) {
           setState("DONE");
           preventNavigation(false);
